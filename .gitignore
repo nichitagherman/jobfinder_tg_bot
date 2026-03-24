@@ -1,0 +1,15 @@
+.env
+.env.*
+*.sqlite
+*.sqlite3
+*.db
+*.log
+__pycache__/
+.DS_Store
+.coverage
+.pytest_cache/
+*.pyc
+cv/
+letters/
+runtime/
+.vscode
