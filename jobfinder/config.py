@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tomllib
 from dataclasses import dataclass
+from datetime import time
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -57,7 +58,7 @@ class Settings:
     telegram_chat_id: str
     db_path: Path
     timezone: str
-    daily_send_time: str
+    notification_times: List[time]
     max_api_requests_per_run: int
     max_jobs_per_run: int
     search_titles: List[str]
@@ -82,7 +83,7 @@ class Settings:
         }
         presets = [
             SearchPreset(
-                name="berlin_brandenburg_all_workplaces",
+                name="berlin_all_workplaces",
                 query_params=dict(common),
                 remote_only=False,
             )
@@ -112,6 +113,29 @@ def load_filter_titles(path: Path) -> List[str]:
     return titles
 
 
+def load_notification_times(path: Path) -> List[time]:
+    if not path.exists():
+        raise ValueError(f"Missing filter config file: {path}")
+    with path.open("rb") as handle:
+        payload = tomllib.load(handle)
+    notification_times = payload.get("notification_times")
+    if not isinstance(notification_times, list):
+        raise ValueError(f"Filter config must define a 'notification_times' list: {path}")
+    parsed: List[time] = []
+    for value in notification_times:
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            hour_text, minute_text = text.split(":", 1)
+            parsed.append(time(hour=int(hour_text), minute=int(minute_text)))
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid notification time '{value}' in {path}; expected HH:MM") from exc
+    if not parsed:
+        raise ValueError(f"Filter config 'notification_times' list must not be empty: {path}")
+    return sorted(parsed)
+
+
 def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) -> Settings:
     env_file = Path(env_path)
     load_dotenv(env_file)
@@ -138,7 +162,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         telegram_chat_id=os.environ["TELEGRAM_CHAT_ID"],
         db_path=db_path,
         timezone=os.getenv("TIMEZONE", "Europe/Berlin"),
-        daily_send_time=os.getenv("DAILY_SEND_TIME", "10:30"),
+        notification_times=load_notification_times(resolved_filters_path),
         max_api_requests_per_run=_get_int("MAX_API_REQUESTS_PER_RUN", 2),
         max_jobs_per_run=_get_int("MAX_JOBS_PER_RUN", 2),
         search_titles=load_filter_titles(resolved_filters_path),

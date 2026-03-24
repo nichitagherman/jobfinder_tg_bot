@@ -1,17 +1,19 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from jobfinder.config import load_settings
 from jobfinder.dedupe import choose_canonical, mark_canonical_jobs
 from jobfinder.jobdatafeeds_client import (
-    berlin_brandenburg_match,
+    berlin_match,
     build_query_params,
     normalize_job,
     remote_berlin_compatible,
     title_matches,
 )
+from jobfinder.runner import previous_scheduled_runtime
 from jobfinder.storage import Storage
 from jobfinder.telegram_client import build_digest_messages
 
@@ -62,7 +64,13 @@ SAMPLE_JOB = {
 }
 
 
-DEFAULT_FILTERS = """job_titles = [
+DEFAULT_FILTERS = """notification_times = [
+  "11:00",
+  "14:00",
+  "18:00",
+]
+
+job_titles = [
   "project manager",
   "project management",
   "business analyst",
@@ -107,6 +115,10 @@ class ConfigTests(unittest.TestCase):
                     "strategy",
                 ],
             )
+            self.assertEqual(
+                settings.notification_times,
+                [time(11, 0), time(14, 0), time(18, 0)],
+            )
 
     def test_build_presets_can_exclude_remote(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -114,17 +126,33 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings(str(env_path))
             presets = settings.build_presets(include_remote=False)
             self.assertEqual(len(presets), 1)
-            self.assertEqual(presets[0].name, "berlin_brandenburg_all_workplaces")
+            self.assertEqual(presets[0].name, "berlin_all_workplaces")
 
     def test_load_settings_can_use_custom_filters_path(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             env_path, _ = write_config_files(root)
             custom_filters = root / "custom_filters.toml"
-            custom_filters.write_text('job_titles = ["strategy"]\n', encoding="utf-8")
+            custom_filters.write_text(
+                'notification_times = ["09:00", "17:00"]\njob_titles = ["strategy"]\n',
+                encoding="utf-8",
+            )
             settings = load_settings(str(env_path), filters_path=str(custom_filters))
             self.assertEqual(settings.search_titles, ["strategy"])
+            self.assertEqual(settings.notification_times, [time(9, 0), time(17, 0)])
             self.assertEqual(settings.filters_path, custom_filters)
+
+
+class ScheduleTests(unittest.TestCase):
+    def test_previous_scheduled_runtime_uses_prior_same_day_slot(self):
+        now_local = datetime(2026, 3, 24, 14, 30, tzinfo=ZoneInfo("Europe/Berlin"))
+        previous = previous_scheduled_runtime(now_local, [time(11, 0), time(14, 0), time(18, 0)])
+        self.assertEqual(previous, datetime(2026, 3, 24, 14, 0, tzinfo=ZoneInfo("Europe/Berlin")))
+
+    def test_previous_scheduled_runtime_wraps_to_previous_day(self):
+        now_local = datetime(2026, 3, 24, 11, 0, tzinfo=ZoneInfo("Europe/Berlin"))
+        previous = previous_scheduled_runtime(now_local, [time(11, 0), time(14, 0), time(18, 0)])
+        self.assertEqual(previous, datetime(2026, 3, 23, 18, 0, tzinfo=ZoneInfo("Europe/Berlin")))
 
 
 class QueryTests(unittest.TestCase):
@@ -162,8 +190,24 @@ class NormalizationTests(unittest.TestCase):
 
     def test_filters_accept_expected_jobs(self):
         job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
-        self.assertTrue(berlin_brandenburg_match(job))
+        self.assertTrue(berlin_match(job))
         self.assertTrue(remote_berlin_compatible(job))
+
+    def test_berlin_filter_rejects_brandenburg(self):
+        raw = dict(SAMPLE_JOB)
+        raw["city"] = "Potsdam"
+        raw["state"] = "Brandenburg"
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["jobLocation"] = {
+            "name": "Potsdam, Brandenburg, Germany",
+            "address": {
+                "addressLocality": "Potsdam",
+                "addressCountry": "Germany",
+                "addressRegion": "Brandenburg",
+            },
+        }
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertFalse(berlin_match(job))
 
     def test_remote_filter_rejects_non_compatible_jobs(self):
         raw = dict(SAMPLE_JOB)

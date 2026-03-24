@@ -146,7 +146,7 @@ def berlin_match(job: NormalizedJob) -> bool:
             ]
         )
     )
-    return any(term in location_blob for term in ("berlin"))
+    return "berlin" in location_blob
 
 
 def remote_berlin_compatible(job: NormalizedJob) -> bool:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from .config import load_settings
@@ -11,6 +11,19 @@ from .jobdatafeeds_client import JobDataFeedsClient
 from .models import RunContext
 from .storage import Storage
 from .telegram_client import TelegramClient, build_digest_messages
+
+
+def previous_scheduled_runtime(now_local: datetime, notification_times) -> datetime:
+    today = now_local.date()
+    prior_today = [
+        datetime.combine(today, scheduled_time, now_local.tzinfo)
+        for scheduled_time in notification_times
+        if scheduled_time < now_local.timetz().replace(tzinfo=None)
+    ]
+    if prior_today:
+        return prior_today[-1]
+    previous_day = today - timedelta(days=1)
+    return datetime.combine(previous_day, notification_times[-1], now_local.tzinfo)
 
 
 def run_daily(
@@ -29,6 +42,10 @@ def run_daily(
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
 
     lower_bound = storage.get_last_checkpoint()
+    if lower_bound is None:
+        lower_bound = previous_scheduled_runtime(now_local, settings.notification_times).astimezone(
+            timezone.utc
+        )
     context = RunContext(started_at=upper_bound, upper_bound=upper_bound, lower_bound=lower_bound)
     run_id = storage.create_run(upper_bound)
 
