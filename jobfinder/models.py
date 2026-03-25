@@ -43,7 +43,7 @@ class FetchSummary:
     api_requests_made: int
     jobs_fetched: int
     was_truncated_by_request_cap: bool
-    was_truncated_by_job_cap: bool
+    incomplete_titles: List[str]
 
 
 @dataclass

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from datetime import datetime, time, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -7,6 +8,7 @@ from zoneinfo import ZoneInfo
 from jobfinder.config import load_settings
 from jobfinder.dedupe import choose_canonical, mark_canonical_jobs
 from jobfinder.jobdatafeeds_client import (
+    JobDataFeedsClient,
     berlin_match,
     build_query_params,
     normalize_job,
@@ -103,7 +105,6 @@ class ConfigTests(unittest.TestCase):
             env_path, _ = write_config_files(Path(tmpdir))
             settings = load_settings(str(env_path))
             self.assertEqual(settings.max_api_requests_per_run, 2)
-            self.assertEqual(settings.max_jobs_per_run, 2)
             self.assertEqual(len(settings.build_presets()), 2)
             self.assertEqual(
                 settings.search_titles,
@@ -177,6 +178,33 @@ class QueryTests(unittest.TestCase):
                 '"project manager" OR "project management" OR "business analyst" OR "business analytics" OR "strategy"',
             )
             self.assertNotIn("", params.keys())
+
+
+class FakeJobDataFeedsClient(JobDataFeedsClient):
+    def __init__(self, settings, payloads):
+        super().__init__(settings)
+        self.payloads = payloads
+        self.requests = []
+
+    def _perform_request(self, params):
+        self.requests.append(dict(params))
+        key = (params.get("title"), int(params["page"]))
+        return self.payloads.get(key, {"result": [], "pageSize": 10, "totalCount": 0})
+
+
+def make_raw_job(title: str, identifier: str) -> dict:
+    raw = dict(SAMPLE_JOB)
+    raw["dateCreated"] = "2026-03-24T12:00:00.000Z"
+    raw["dateActive"] = "2026-03-24T12:00:00Z"
+    raw["dateExpired"] = "2026-04-24T12:00:00Z"
+    raw["title"] = title
+    raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+    raw["jsonLD"]["title"] = title
+    raw["jsonLD"]["identifier"] = identifier
+    raw["jsonLD"]["url"] = f"https://example.com/{identifier}"
+    raw["jsonLD"]["datePosted"] = "2026-03-24"
+    raw["jsonLD"]["validThrough"] = "2026-04-24T12:00:00Z"
+    return raw
 
 
 class NormalizationTests(unittest.TestCase):
@@ -290,11 +318,119 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0].title, "Project Management Lead")
 
+    def test_finalize_run_persists_incomplete_titles_and_query_count(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            storage = Storage(Path(tmpdir) / "jobs.sqlite3")
+            run_id = storage.create_run(datetime(2025, 1, 23, tzinfo=timezone.utc))
+            storage.finalize_run(
+                run_id,
+                ended_at=datetime(2025, 1, 23, 1, tzinfo=timezone.utc),
+                status="success",
+                api_requests_made=4,
+                jobs_fetched=12,
+                jobs_inserted=12,
+                jobs_canonical=10,
+                was_truncated_by_request_cap=True,
+                incomplete_titles=["strategy", "business analyst"],
+            )
+            run = storage.get_run(run_id)
+            self.assertEqual(run["api_requests_made"], 4)
+            self.assertEqual(
+                json.loads(run["incomplete_titles_json"]),
+                ["business analyst", "strategy"],
+            )
+
+
+class FetchSchedulingTests(unittest.TestCase):
+    def _settings(self, root: Path, *, max_requests: int = 5):
+        env_path = root / ".env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "JOBDATAFEEDS_API_TOKEN=test-token",
+                    "TELEGRAM_BOT_TOKEN=test-bot",
+                    "TELEGRAM_CHAT_ID=12345",
+                    f"MAX_API_REQUESTS_PER_RUN={max_requests}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        filters = root / "jobfinder_filters.toml"
+        filters.write_text(
+            "\n".join(
+                [
+                    'notification_times = ["11:00", "14:00", "18:00"]',
+                    'job_titles = ["alpha", "beta", "gamma"]',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return load_settings(str(env_path), filters_path=str(filters))
+
+    def test_fetch_jobs_gives_every_title_page_one_before_page_two(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = self._settings(Path(tmpdir), max_requests=5)
+            payloads = {
+                ('"alpha"', 1): {"result": [make_raw_job("Alpha role", f"a1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ('"beta"', 1): {"result": [make_raw_job("Beta role", f"b1-{i}") for i in range(3)], "pageSize": 10, "totalCount": 3},
+                ('"gamma"', 1): {"result": [make_raw_job("Gamma role", f"g1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ('"alpha"', 2): {"result": [make_raw_job("Alpha role", f"a2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
+                ('"gamma"', 2): {"result": [make_raw_job("Gamma role", f"g2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
+            }
+            client = FakeJobDataFeedsClient(settings, payloads)
+            context = previous_scheduled_runtime(
+                datetime(2026, 3, 24, 14, 30, tzinfo=ZoneInfo("Europe/Berlin")),
+                settings.notification_times,
+            )
+            summary = client.fetch_jobs(
+                type("Ctx", (), {
+                    "started_at": datetime(2026, 3, 24, 14, 30, tzinfo=timezone.utc),
+                    "upper_bound": datetime(2026, 3, 24, 14, 30, tzinfo=timezone.utc),
+                    "lower_bound": context.astimezone(timezone.utc),
+                })(),
+                include_remote=False,
+            )
+            seen = [(req["title"], req["page"]) for req in client.requests]
+            self.assertEqual(
+                seen,
+                [('"alpha"', "1"), ('"beta"', "1"), ('"gamma"', "1"), ('"alpha"', "2"), ('"gamma"', "2")],
+            )
+            self.assertEqual(summary.api_requests_made, 5)
+
+    def test_fetch_jobs_marks_incomplete_titles_when_request_cap_hits(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = self._settings(Path(tmpdir), max_requests=4)
+            payloads = {
+                ('"alpha"', 1): {"result": [make_raw_job("Alpha role", f"a1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ('"beta"', 1): {"result": [make_raw_job("Beta role", f"b1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ('"gamma"', 1): {"result": [make_raw_job("Gamma role", f"g1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ('"alpha"', 2): {"result": [make_raw_job("Alpha role", f"a2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
+            }
+            client = FakeJobDataFeedsClient(settings, payloads)
+            context = type("Ctx", (), {
+                "started_at": datetime(2026, 3, 24, 14, 30, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 24, 14, 30, tzinfo=timezone.utc),
+                "lower_bound": datetime(2026, 3, 24, 11, 0, tzinfo=timezone.utc),
+            })()
+            summary = client.fetch_jobs(context, include_remote=False)
+            self.assertTrue(summary.was_truncated_by_request_cap)
+            self.assertEqual(summary.incomplete_titles, ["beta", "gamma"])
+
 
 class TelegramTests(unittest.TestCase):
     def test_empty_digest_message(self):
         messages = build_digest_messages([], truncated=False, empty_notice=True)
         self.assertEqual(messages, ["No new matching jobs were found in the last run."])
+
+    def test_truncated_digest_mentions_incomplete_titles(self):
+        messages = build_digest_messages(
+            [{"work_place_json": "[]", "city": "Berlin", "state": "Berlin", "country_code": "de", "date_created": "2025-01-01", "fetched_at": "2025-01-01", "title": "Role", "company": "Comp", "portal": "linkedin", "source": "x", "canonical_url": "https://example.com"}],
+            truncated=True,
+            empty_notice=True,
+            incomplete_titles=["strategy", "business analyst"],
+        )
+        self.assertIn("Incomplete titles: strategy, business analyst", messages[0])
 
 
 if __name__ == "__main__":

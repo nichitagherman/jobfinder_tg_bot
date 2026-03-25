@@ -11,9 +11,9 @@ Local-first Python bot that fetches new jobs from the RapidAPI-hosted JobDataFee
 - Deduplicates across sources and prefers LinkedIn when duplicates overlap
 - Sends a Telegram digest with application links
 - Tracks the last successful fetch window to avoid resending old jobs
+- Writes detailed logs to console and to `runtime/jobfinder.log` by default
 - Enforces strict API safety caps with these defaults:
-  - `MAX_API_REQUESTS_PER_RUN=2`
-  - `MAX_JOBS_PER_RUN=2`
+  - `MAX_API_REQUESTS_PER_RUN=8`
 
 ## Local Setup
 
@@ -35,6 +35,7 @@ cp .env.example .env
 3. Edit [`jobfinder_filters.toml`](/Users/nikitagerman/Desktop/jobfinder_tg_bot/jobfinder_filters.toml) to control:
    - which job title variants are matched
    - which notification times are expected, currently `11:00`, `14:00`, and `18:00`
+   - logging stays enabled by default; override `LOG_PATH` in `.env` only if you want the log file elsewhere
 
 4. Run a dry run first:
 
@@ -76,8 +77,11 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 
 ## Notes
 
-- Title variants live in `jobfinder_filters.toml`; changing that file affects both the API title query and local post-filtering.
+- Title variants live in `jobfinder_filters.toml`; for local searches the bot now queries them fairly, one title page at a time before deeper pagination.
 - Notification times also live in `jobfinder_filters.toml`; they control the expected run cadence and the fallback initial fetch window.
+- `MAX_API_REQUESTS_PER_RUN` is the only collection limiter.
+- Detailed logs are enabled by default and go to `runtime/jobfinder.log` plus stdout/stderr.
 - The implementation assumes the JobDataFeeds API can be queried with page-based pagination and JSON output.
 - Date filtering is still sent with `dateCreatedMin` / `dateCreatedMax`; for multiple same-day runs this may hit the same calendar day upstream, but the exact SQLite checkpoint and local timestamp filtering still constrain results to the relevant time window.
+- If a run stops before all likely pages are fetched, the DB stores the incomplete titles for that run and the Telegram digest warns about them.
 - If you ever need to recreate the environment instead of cloning it, use `environment.yml`.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime
@@ -8,6 +9,9 @@ from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence
 
 from .models import NormalizedJob
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 SCHEMA = """
@@ -55,7 +59,7 @@ CREATE TABLE IF NOT EXISTS runs (
     jobs_inserted INTEGER NOT NULL DEFAULT 0,
     jobs_canonical INTEGER NOT NULL DEFAULT 0,
     was_truncated_by_request_cap INTEGER NOT NULL DEFAULT 0,
-    was_truncated_by_job_cap INTEGER NOT NULL DEFAULT 0,
+    incomplete_titles_json TEXT NOT NULL DEFAULT '[]',
     error_message TEXT
 );
 
@@ -73,10 +77,16 @@ class Storage:
         self.db_path = db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        LOGGER.info("Storage initialized: db_path=%s", self.db_path)
 
     def _init_db(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
+            if "incomplete_titles_json" not in columns:
+                conn.execute(
+                    "ALTER TABLE runs ADD COLUMN incomplete_titles_json TEXT NOT NULL DEFAULT '[]'"
+                )
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -94,7 +104,9 @@ class Storage:
                 "INSERT INTO runs (started_at, status) VALUES (?, ?)",
                 (started_at.isoformat(), "running"),
             )
-            return int(cursor.lastrowid)
+            run_id = int(cursor.lastrowid)
+        LOGGER.info("Run created: run_id=%s started_at=%s", run_id, started_at.isoformat())
+        return run_id
 
     def finalize_run(
         self,
@@ -107,7 +119,7 @@ class Storage:
         jobs_inserted: int,
         jobs_canonical: int,
         was_truncated_by_request_cap: bool,
-        was_truncated_by_job_cap: bool,
+        incomplete_titles: Sequence[str],
         error_message: Optional[str] = None,
     ) -> None:
         with self.connect() as conn:
@@ -116,7 +128,7 @@ class Storage:
                 UPDATE runs
                 SET ended_at = ?, status = ?, api_requests_made = ?, jobs_fetched = ?,
                     jobs_inserted = ?, jobs_canonical = ?, was_truncated_by_request_cap = ?,
-                    was_truncated_by_job_cap = ?, error_message = ?
+                    incomplete_titles_json = ?, error_message = ?
                 WHERE id = ?
                 """,
                 (
@@ -127,11 +139,29 @@ class Storage:
                     jobs_inserted,
                     jobs_canonical,
                     int(was_truncated_by_request_cap),
-                    int(was_truncated_by_job_cap),
+                    json.dumps(sorted(incomplete_titles)),
                     error_message,
                     run_id,
                 ),
             )
+        LOGGER.info(
+            "Run finalized: run_id=%s status=%s api_requests=%s jobs_fetched=%s jobs_inserted=%s jobs_canonical=%s truncated=%s incomplete_titles=%s",
+            run_id,
+            status,
+            api_requests_made,
+            jobs_fetched,
+            jobs_inserted,
+            jobs_canonical,
+            was_truncated_by_request_cap,
+            list(sorted(incomplete_titles)),
+        )
+
+    def get_run(self, run_id: int) -> sqlite3.Row:
+        with self.connect() as conn:
+            row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"Unknown run id: {run_id}")
+        return row
 
     def get_last_checkpoint(self) -> Optional[datetime]:
         with self.connect() as conn:
@@ -148,6 +178,7 @@ class Storage:
                 "UPDATE checkpoints SET last_successful_upper_bound = ? WHERE id = 1",
                 (upper_bound.isoformat(),),
             )
+        LOGGER.info("Checkpoint updated: upper_bound=%s", upper_bound.isoformat())
 
     def upsert_jobs(self, jobs: Sequence[NormalizedJob]) -> int:
         inserted = 0
@@ -221,6 +252,7 @@ class Storage:
                     ),
                 )
                 inserted += cursor.rowcount if cursor.rowcount > 0 else 0
+        LOGGER.info("Jobs upserted: batch_size=%s sqlite_rowcount_sum=%s", len(jobs), inserted)
         return inserted
 
     def update_canonical_flags(self, canonical_urls: Iterable[str]) -> None:
@@ -232,15 +264,17 @@ class Storage:
                     "UPDATE jobs SET is_canonical = 1 WHERE canonical_url = ?",
                     [(url,) for url in canonical_urls],
                 )
+        LOGGER.info("Canonical flags updated: canonical_urls=%s", len(canonical_urls))
 
     def get_all_jobs(self) -> List[NormalizedJob]:
         with self.connect() as conn:
             rows = list(conn.execute("SELECT * FROM jobs ORDER BY fetched_at DESC").fetchall())
+        LOGGER.info("Loaded all jobs from storage: count=%s", len(rows))
         return [self._row_to_job(row) for row in rows]
 
     def get_unsent_canonical_jobs(self) -> List[sqlite3.Row]:
         with self.connect() as conn:
-            return list(
+            rows = list(
                 conn.execute(
                     """
                     SELECT *
@@ -250,16 +284,20 @@ class Storage:
                     """
                 ).fetchall()
             )
+        LOGGER.info("Loaded unsent canonical jobs: count=%s", len(rows))
+        return rows
 
     def mark_jobs_sent(self, canonical_urls: Iterable[str], sent_at: datetime) -> None:
         urls = list(canonical_urls)
         if not urls:
+            LOGGER.info("No jobs to mark as sent.")
             return
         with self.connect() as conn:
             conn.executemany(
                 "UPDATE jobs SET sent_at = ? WHERE canonical_url = ?",
                 [(sent_at.isoformat(), url) for url in urls],
             )
+        LOGGER.info("Jobs marked as sent: count=%s sent_at=%s", len(urls), sent_at.isoformat())
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> NormalizedJob:

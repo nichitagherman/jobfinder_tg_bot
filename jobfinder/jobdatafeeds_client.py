@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+from collections import deque
 import hashlib
 import json
+import logging
 from datetime import datetime
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Deque, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from .config import SearchPreset, Settings
 from .dedupe import build_duplicate_fingerprint, normalize_text
 from .models import FetchSummary, NormalizedJob, RunContext
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
@@ -123,9 +128,13 @@ def build_query_params(
     page: int,
     lower_bound: Optional[datetime],
     upper_bound: datetime,
+    *,
+    title_override: Optional[str] = None,
 ) -> Dict[str, str]:
     params = dict(preset.query_params)
     params["page"] = str(page)
+    if title_override is not None:
+        params["title"] = f'"{title_override}"'
     # The API documentation is inconsistent between dateCreated and dateCreatedMin/Max.
     # We send both bounds when available and rely on local dedupe if the API falls back to day precision.
     params["dateCreatedMax"] = upper_bound.date().isoformat()
@@ -195,6 +204,14 @@ class JobDataFeedsClient:
 
     def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
         query = urlencode(params)
+        LOGGER.info(
+            "Requesting JobDataFeeds: page=%s title=%s workPlace=%s dateCreatedMin=%s dateCreatedMax=%s",
+            params.get("page"),
+            params.get("title"),
+            params.get("workPlace", ""),
+            params.get("dateCreatedMin", ""),
+            params.get("dateCreatedMax", ""),
+        )
         request = Request(
             f"{self.settings.rapidapi_base_url}?{query}",
             headers={
@@ -205,72 +222,226 @@ class JobDataFeedsClient:
             method="GET",
         )
         with urlopen(request, timeout=30) as response:
-            return json.loads(response.read().decode("utf-8"))
+            payload = json.loads(response.read().decode("utf-8"))
+        LOGGER.info(
+            "JobDataFeeds response received: page=%s totalCount=%s pageSize=%s raw_results=%s",
+            params.get("page"),
+            payload.get("totalCount"),
+            payload.get("pageSize"),
+            len(payload.get("result", [])) if isinstance(payload.get("result"), list) else 0,
+        )
+        return payload
 
-    def fetch_jobs(self, context: RunContext, *, include_remote: bool = True) -> FetchSummary:
+    def _normalize_page_jobs(
+        self,
+        raw_items: List[object],
+        context: RunContext,
+        *,
+        remote_only: bool,
+    ) -> List[NormalizedJob]:
+        normalized_page: List[NormalizedJob] = []
+        rejected_wrong_title = 0
+        rejected_wrong_location = 0
+        rejected_out_of_window = 0
+        for raw_item in raw_items:
+            if not isinstance(raw_item, dict):
+                continue
+            job = normalize_job(raw_item, context.started_at)
+            if not title_matches(job, self.settings.search_titles):
+                rejected_wrong_title += 1
+                continue
+            if remote_only:
+                if not remote_berlin_compatible(job):
+                    rejected_wrong_location += 1
+                    continue
+            else:
+                if not berlin_match(job):
+                    rejected_wrong_location += 1
+                    continue
+            posted_at = _parse_iso(job.date_created)
+            if context.lower_bound and posted_at and posted_at <= context.lower_bound:
+                rejected_out_of_window += 1
+                continue
+            if posted_at and posted_at > context.upper_bound:
+                rejected_out_of_window += 1
+                continue
+            normalized_page.append(job)
+        LOGGER.info(
+            "Normalized page: kept=%s rejected_title=%s rejected_location=%s rejected_window=%s remote_only=%s",
+            len(normalized_page),
+            rejected_wrong_title,
+            rejected_wrong_location,
+            rejected_out_of_window,
+            remote_only,
+        )
+        return normalized_page
+
+    def _fetch_local_jobs(
+        self,
+        preset: SearchPreset,
+        context: RunContext,
+    ) -> FetchSummary:
         jobs: List[NormalizedJob] = []
         api_requests_made = 0
         truncated_by_request_cap = False
-        truncated_by_job_cap = False
+        incomplete_titles: set[str] = set()
+        queue: Deque[tuple[str, int]] = deque((title, 1) for title in self.settings.search_titles)
 
-        for preset in self.settings.build_presets(include_remote=include_remote):
-            page = 1
-            while True:
-                if api_requests_made >= self.settings.max_api_requests_per_run:
-                    truncated_by_request_cap = True
-                    break
-                if len(jobs) >= self.settings.max_jobs_per_run:
-                    truncated_by_job_cap = True
-                    break
-
-                params = build_query_params(preset, page, context.lower_bound, context.upper_bound)
-                payload = self._perform_request(params)
-                api_requests_made += 1
-                result = payload.get("result", [])
-                if not isinstance(result, list) or not result:
-                    break
-
-                normalized_page: List[NormalizedJob] = []
-                for raw_item in result:
-                    if not isinstance(raw_item, dict):
-                        continue
-                    job = normalize_job(raw_item, context.started_at)
-                    if not title_matches(job, self.settings.search_titles):
-                        continue
-                    if preset.remote_only:
-                        if not remote_berlin_compatible(job):
-                            continue
-                    else:
-                        if not berlin_match(job):
-                            continue
-                    posted_at = _parse_iso(job.date_created)
-                    if context.lower_bound and posted_at and posted_at <= context.lower_bound:
-                        continue
-                    if posted_at and posted_at > context.upper_bound:
-                        continue
-                    normalized_page.append(job)
-
-                remaining = self.settings.max_jobs_per_run - len(jobs)
-                jobs.extend(normalized_page[:remaining])
-                if len(normalized_page) > remaining:
-                    truncated_by_job_cap = True
-                    break
-                if len(jobs) >= self.settings.max_jobs_per_run:
-                    truncated_by_job_cap = True
-                    break
-                page += 1
-                page_size = int(payload.get("pageSize", 10) or 10)
-                total_count = int(payload.get("totalCount", 0) or 0)
-                if page_size * (page - 1) >= total_count:
-                    break
-
-            if truncated_by_request_cap or truncated_by_job_cap:
+        while queue:
+            if api_requests_made >= self.settings.max_api_requests_per_run:
+                truncated_by_request_cap = True
+                incomplete_titles.update(title for title, _ in queue)
+                LOGGER.warning(
+                    "Request cap reached for local fetch: cap=%s incomplete_titles=%s",
+                    self.settings.max_api_requests_per_run,
+                    sorted(incomplete_titles),
+                )
                 break
+
+            title, page = queue.popleft()
+            params = build_query_params(
+                preset,
+                page,
+                context.lower_bound,
+                context.upper_bound,
+                title_override=title,
+            )
+            payload = self._perform_request(params)
+            api_requests_made += 1
+            result = payload.get("result", [])
+            if not isinstance(result, list):
+                result = []
+
+            normalized_page = self._normalize_page_jobs(result, context, remote_only=False)
+            page_size = int(payload.get("pageSize", 10) or 10)
+            has_more_pages = bool(result) and page_size > 0 and len(result) >= page_size
+            jobs.extend(normalized_page)
+            LOGGER.info(
+                "Local title page processed: title=%s page=%s kept=%s raw=%s has_more_pages=%s queue_remaining=%s",
+                title,
+                page,
+                len(normalized_page),
+                len(result),
+                has_more_pages,
+                len(queue),
+            )
+
+            if has_more_pages:
+                queue.append((title, page + 1))
 
         return FetchSummary(
             jobs=jobs,
             api_requests_made=api_requests_made,
             jobs_fetched=len(jobs),
             was_truncated_by_request_cap=truncated_by_request_cap,
-            was_truncated_by_job_cap=truncated_by_job_cap,
+            incomplete_titles=sorted(incomplete_titles),
+        )
+
+    def _fetch_preset_jobs(
+        self,
+        preset: SearchPreset,
+        context: RunContext,
+        *,
+        starting_api_requests: int,
+    ) -> FetchSummary:
+        jobs: List[NormalizedJob] = []
+        api_requests_made = starting_api_requests
+        truncated_by_request_cap = False
+
+        page = 1
+        while True:
+            if api_requests_made >= self.settings.max_api_requests_per_run:
+                truncated_by_request_cap = True
+                LOGGER.warning(
+                    "Request cap reached for preset fetch: preset=%s cap=%s",
+                    preset.name,
+                    self.settings.max_api_requests_per_run,
+                )
+                break
+
+            params = build_query_params(preset, page, context.lower_bound, context.upper_bound)
+            payload = self._perform_request(params)
+            api_requests_made += 1
+            result = payload.get("result", [])
+            if not isinstance(result, list) or not result:
+                LOGGER.info("Preset fetch ended: preset=%s page=%s raw_results=0", preset.name, page)
+                break
+
+            normalized_page = self._normalize_page_jobs(result, context, remote_only=preset.remote_only)
+            jobs.extend(normalized_page)
+            LOGGER.info(
+                "Preset page processed: preset=%s page=%s kept=%s raw=%s",
+                preset.name,
+                page,
+                len(normalized_page),
+                len(result),
+            )
+            page += 1
+            page_size = int(payload.get("pageSize", 10) or 10)
+            total_count = int(payload.get("totalCount", 0) or 0)
+            if page_size * (page - 1) >= total_count:
+                LOGGER.info(
+                    "Preset fetch complete: preset=%s pages=%s total_count=%s kept=%s",
+                    preset.name,
+                    page - 1,
+                    total_count,
+                    len(jobs),
+                )
+                break
+
+        return FetchSummary(
+            jobs=jobs,
+            api_requests_made=api_requests_made - starting_api_requests,
+            jobs_fetched=len(jobs),
+            was_truncated_by_request_cap=truncated_by_request_cap,
+            incomplete_titles=[],
+        )
+
+    def fetch_jobs(self, context: RunContext, *, include_remote: bool = True) -> FetchSummary:
+        jobs: List[NormalizedJob] = []
+        api_requests_made = 0
+        truncated_by_request_cap = False
+        incomplete_titles: set[str] = set()
+
+        LOGGER.info(
+            "Starting fetch cycle: include_remote=%s presets=%s request_cap=%s titles=%s lower_bound=%s upper_bound=%s",
+            include_remote,
+            [preset.name for preset in self.settings.build_presets(include_remote=include_remote)],
+            self.settings.max_api_requests_per_run,
+            self.settings.search_titles,
+            context.lower_bound.isoformat() if context.lower_bound else None,
+            context.upper_bound.isoformat(),
+        )
+        for preset in self.settings.build_presets(include_remote=include_remote):
+            if not preset.remote_only:
+                summary = self._fetch_local_jobs(preset, context)
+            else:
+                summary = self._fetch_preset_jobs(
+                    preset,
+                    context,
+                    starting_api_requests=api_requests_made,
+                )
+
+            jobs.extend(summary.jobs)
+            api_requests_made += summary.api_requests_made
+            truncated_by_request_cap = truncated_by_request_cap or summary.was_truncated_by_request_cap
+            incomplete_titles.update(summary.incomplete_titles)
+
+            if truncated_by_request_cap:
+                break
+
+        LOGGER.info(
+            "Fetch cycle finished: jobs=%s api_requests=%s truncated=%s incomplete_titles=%s",
+            len(jobs),
+            api_requests_made,
+            truncated_by_request_cap,
+            sorted(incomplete_titles),
+        )
+
+        return FetchSummary(
+            jobs=jobs,
+            api_requests_made=api_requests_made,
+            jobs_fetched=len(jobs),
+            was_truncated_by_request_cap=truncated_by_request_cap,
+            incomplete_titles=sorted(incomplete_titles),
         )

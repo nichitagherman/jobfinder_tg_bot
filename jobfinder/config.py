@@ -5,7 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def load_dotenv(path: Path) -> None:
@@ -18,7 +18,7 @@ def load_dotenv(path: Path) -> None:
         key, value = line.split("=", 1)
         key = key.strip()
         value = value.strip().strip("'").strip('"')
-        os.environ.setdefault(key, value)
+        os.environ[key] = value
 
 
 def _get_bool(name: str, default: bool) -> bool:
@@ -60,12 +60,12 @@ class Settings:
     timezone: str
     notification_times: List[time]
     max_api_requests_per_run: int
-    max_jobs_per_run: int
     search_titles: List[str]
     search_country_code: str
     allow_all_sources: bool
     cv_path: Optional[Path]
     cover_letter_path: Optional[Path]
+    log_path: Path
     env_path: Path
     filters_path: Path
 
@@ -100,10 +100,7 @@ class Settings:
 
 
 def load_filter_titles(path: Path) -> List[str]:
-    if not path.exists():
-        raise ValueError(f"Missing filter config file: {path}")
-    with path.open("rb") as handle:
-        payload = tomllib.load(handle)
+    payload = load_filter_payload(path)
     job_titles = payload.get("job_titles")
     if not isinstance(job_titles, list):
         raise ValueError(f"Filter config must define a 'job_titles' list: {path}")
@@ -114,10 +111,7 @@ def load_filter_titles(path: Path) -> List[str]:
 
 
 def load_notification_times(path: Path) -> List[time]:
-    if not path.exists():
-        raise ValueError(f"Missing filter config file: {path}")
-    with path.open("rb") as handle:
-        payload = tomllib.load(handle)
+    payload = load_filter_payload(path)
     notification_times = payload.get("notification_times")
     if not isinstance(notification_times, list):
         raise ValueError(f"Filter config must define a 'notification_times' list: {path}")
@@ -136,6 +130,16 @@ def load_notification_times(path: Path) -> List[time]:
     return sorted(parsed)
 
 
+def load_filter_payload(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        raise ValueError(f"Missing filter config file: {path}")
+    with path.open("rb") as handle:
+        payload = tomllib.load(handle)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Filter config must be a TOML table: {path}")
+    return payload
+
+
 def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) -> Settings:
     env_file = Path(env_path)
     load_dotenv(env_file)
@@ -152,6 +156,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
     db_path = Path(os.getenv("DB_PATH", "runtime/jobfinder.sqlite3"))
     cv_path = _get_optional("CV_PATH")
     cover_letter_path = _get_optional("COVER_LETTER_PATH")
+    log_path = Path(os.getenv("LOG_PATH", str(db_path.parent / "jobfinder.log")))
 
     return Settings(
         jobdatafeeds_api_key=os.environ["JOBDATAFEEDS_API_TOKEN"],
@@ -164,12 +169,12 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         timezone=os.getenv("TIMEZONE", "Europe/Berlin"),
         notification_times=load_notification_times(resolved_filters_path),
         max_api_requests_per_run=_get_int("MAX_API_REQUESTS_PER_RUN", 2),
-        max_jobs_per_run=_get_int("MAX_JOBS_PER_RUN", 2),
         search_titles=load_filter_titles(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
         allow_all_sources=_get_bool("ALLOW_ALL_SOURCES", True),
         cv_path=Path(cv_path) if cv_path else None,
         cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
+        log_path=log_path,
         env_path=env_file,
         filters_path=resolved_filters_path,
     )
