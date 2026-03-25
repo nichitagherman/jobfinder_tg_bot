@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import re
 import tomllib
 from dataclasses import dataclass
 from datetime import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+
+_TITLE_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
 
 def load_dotenv(path: Path) -> None:
@@ -43,6 +47,13 @@ def _get_optional(name: str) -> Optional[str]:
     return stripped or None
 
 
+def build_api_title_query(title: str) -> str:
+    tokens = [token.lower() for token in _TITLE_TOKEN_RE.findall(title)]
+    if not tokens:
+        return title.strip()
+    return ",".join(f"+{token}" for token in tokens)
+
+
 @dataclass(frozen=True)
 class SearchPreset:
     name: str
@@ -66,6 +77,7 @@ class Settings:
     cv_path: Optional[Path]
     cover_letter_path: Optional[Path]
     log_path: Path
+    filtered_out_jobs_log_path: Path
     env_path: Path
     filters_path: Path
 
@@ -74,10 +86,9 @@ class Settings:
         return f"https://{self.jobdatafeeds_api_host}/api/v2/jobs/search"
 
     def build_presets(self, *, include_remote: bool = True) -> List[SearchPreset]:
-        title_query = " OR ".join(f'"{title}"' for title in self.search_titles)
+        title_query = " OR ".join(build_api_title_query(title) for title in self.search_titles)
         common = {
             "format": "json",
-            "countryCode": self.search_country_code,
             "title": title_query,
         }
         presets = [
@@ -161,6 +172,9 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
     cv_path = _get_optional("CV_PATH")
     cover_letter_path = _get_optional("COVER_LETTER_PATH")
     log_path = Path(os.getenv("LOG_PATH", str(db_path.parent / "jobfinder.log")))
+    filtered_out_jobs_log_path = Path(
+        os.getenv("FILTERED_OUT_JOBS_LOG_PATH", str(db_path.parent / "filtered_out_jobs.jsonl"))
+    )
 
     return Settings(
         jobdatafeeds_api_key=os.environ["JOBDATAFEEDS_API_TOKEN"],
@@ -179,6 +193,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         cv_path=Path(cv_path) if cv_path else None,
         cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
         log_path=log_path,
+        filtered_out_jobs_log_path=filtered_out_jobs_log_path,
         env_path=env_file,
         filters_path=resolved_filters_path,
     )

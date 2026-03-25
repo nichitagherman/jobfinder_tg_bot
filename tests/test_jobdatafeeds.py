@@ -178,7 +178,7 @@ class QueryTests(unittest.TestCase):
             self.assertEqual(params["dateCreatedMax"], "2025-01-02")
             self.assertEqual(
                 params["title"],
-                '"project manager" OR "project management" OR "business analyst" OR "business analytics" OR "strategy"',
+                "+project,+manager OR +project,+management OR +business,+analyst OR +business,+analytics OR +strategy",
             )
             self.assertNotIn("isActive", params)
             self.assertNotIn("", params.keys())
@@ -228,7 +228,7 @@ class QueryTests(unittest.TestCase):
                 return response
 
             with patch("jobfinder.jobdatafeeds_client.urlopen", side_effect=fake_urlopen):
-                payload = client._perform_request({"page": "1", "title": '"project manager"'})
+                payload = client._perform_request({"page": "1", "title": "+project,+manager"})
 
             self.assertEqual(payload["totalCount"], 0)
             self.assertEqual(client.sleep_calls, [5.0])
@@ -435,11 +435,11 @@ class FetchSchedulingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = self._settings(Path(tmpdir), max_requests=5)
             payloads = {
-                ('"alpha"', 1): {"result": [make_raw_job("Alpha role", f"a1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
-                ('"beta"', 1): {"result": [make_raw_job("Beta role", f"b1-{i}") for i in range(3)], "pageSize": 10, "totalCount": 3},
-                ('"gamma"', 1): {"result": [make_raw_job("Gamma role", f"g1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
-                ('"alpha"', 2): {"result": [make_raw_job("Alpha role", f"a2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
-                ('"gamma"', 2): {"result": [make_raw_job("Gamma role", f"g2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
+                ("+alpha", 1): {"result": [make_raw_job("Alpha role", f"a1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ("+beta", 1): {"result": [make_raw_job("Beta role", f"b1-{i}") for i in range(3)], "pageSize": 10, "totalCount": 3},
+                ("+gamma", 1): {"result": [make_raw_job("Gamma role", f"g1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ("+alpha", 2): {"result": [make_raw_job("Alpha role", f"a2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
+                ("+gamma", 2): {"result": [make_raw_job("Gamma role", f"g2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
             }
             client = FakeJobDataFeedsClient(settings, payloads)
             context = previous_scheduled_runtime(
@@ -457,7 +457,7 @@ class FetchSchedulingTests(unittest.TestCase):
             seen = [(req["title"], req["page"]) for req in client.requests]
             self.assertEqual(
                 seen,
-                [('"alpha"', "1"), ('"beta"', "1"), ('"gamma"', "1"), ('"alpha"', "2"), ('"gamma"', "2")],
+                [("+alpha", "1"), ("+beta", "1"), ("+gamma", "1"), ("+alpha", "2"), ("+gamma", "2")],
             )
             self.assertEqual(summary.api_requests_made, 5)
 
@@ -465,10 +465,10 @@ class FetchSchedulingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = self._settings(Path(tmpdir), max_requests=4)
             payloads = {
-                ('"alpha"', 1): {"result": [make_raw_job("Alpha role", f"a1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
-                ('"beta"', 1): {"result": [make_raw_job("Beta role", f"b1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
-                ('"gamma"', 1): {"result": [make_raw_job("Gamma role", f"g1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
-                ('"alpha"', 2): {"result": [make_raw_job("Alpha role", f"a2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
+                ("+alpha", 1): {"result": [make_raw_job("Alpha role", f"a1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ("+beta", 1): {"result": [make_raw_job("Beta role", f"b1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ("+gamma", 1): {"result": [make_raw_job("Gamma role", f"g1-{i}") for i in range(10)], "pageSize": 10, "totalCount": 20},
+                ("+alpha", 2): {"result": [make_raw_job("Alpha role", f"a2-{i}") for i in range(2)], "pageSize": 10, "totalCount": 20},
             }
             client = FakeJobDataFeedsClient(settings, payloads)
             context = type("Ctx", (), {

@@ -1,12 +1,9 @@
 notification_times = [
-  "11:00",
-  "16:00"
+  "12:00"
 ]
 
 job_titles = [
-  "project manager",
-  "project management",
-  "business analyst",
-  "business analytics",
+  "business",
+  "operations",
   "strategy"
 ]

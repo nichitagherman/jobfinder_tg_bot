@@ -11,12 +11,14 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .config import SearchPreset, Settings
+from .config import SearchPreset, Settings, build_api_title_query
 from .dedupe import build_duplicate_fingerprint, normalize_text
+from .logging_utils import FILTERED_OUT_LOGGER_NAME
 from .models import FetchSummary, NormalizedJob, RunContext
 
 
 LOGGER = logging.getLogger(__name__)
+FILTERED_OUT_LOGGER = logging.getLogger(FILTERED_OUT_LOGGER_NAME)
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
 
@@ -138,7 +140,7 @@ def build_query_params(
     params = dict(preset.query_params)
     params["page"] = str(page)
     if title_override is not None:
-        params["title"] = f'"{title_override}"'
+        params["title"] = build_api_title_query(title_override)
     # The API documentation is inconsistent between dateCreated and dateCreatedMin/Max.
     # We send both bounds when available and rely on local dedupe if the API falls back to day precision.
     params["dateCreatedMax"] = upper_bound.date().isoformat()
@@ -207,9 +209,46 @@ class JobDataFeedsClient:
     def _mark_request_attempt(self) -> None:
         self._last_request_monotonic = time.monotonic()
 
+    def _log_filtered_out_job(
+        self,
+        *,
+        reason: str,
+        job: NormalizedJob,
+        context: RunContext,
+        remote_only: bool,
+    ) -> None:
+        FILTERED_OUT_LOGGER.info(
+            json.dumps(
+                {
+                    "reason": reason,
+                    "title": job.title,
+                    "company": job.company,
+                    "portal": job.portal,
+                    "source": job.source,
+                    "city": job.city,
+                    "state": job.state,
+                    "country_code": job.country_code,
+                    "date_created": job.date_created,
+                    "canonical_url": job.canonical_url,
+                    "remote_only": remote_only,
+                    "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
+                    "upper_bound": context.upper_bound.isoformat(),
+                    "raw_job": job.raw_json,
+                },
+                ensure_ascii=True,
+            )
+        )
+
     def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
         self._apply_request_cooldown()
         query = urlencode(params)
+        curl_like = (
+            "curl --request GET "
+            f"--url '{self.settings.rapidapi_base_url}?{query}' "
+            "--header 'Content-Type: application/json' "
+            f"--header 'x-rapidapi-host: {self.settings.jobdatafeeds_api_host}' "
+            "--header 'x-rapidapi-key: [REDACTED]'"
+        )
         LOGGER.info(
             "Requesting JobDataFeeds: page=%s title=%s workPlace=%s dateCreatedMin=%s dateCreatedMax=%s",
             params.get("page"),
@@ -218,6 +257,7 @@ class JobDataFeedsClient:
             params.get("dateCreatedMin", ""),
             params.get("dateCreatedMax", ""),
         )
+        LOGGER.info("JobDataFeeds cURL: %s", curl_like)
         request = Request(
             f"{self.settings.rapidapi_base_url}?{query}",
             headers={
@@ -271,14 +311,38 @@ class JobDataFeedsClient:
             job = normalize_job(raw_item, context.started_at)
             if not title_matches(job, self.settings.search_titles):
                 rejected_wrong_title += 1
+                self._log_filtered_out_job(
+                    reason="title_mismatch",
+                    job=job,
+                    context=context,
+                    remote_only=remote_only,
+                )
                 continue
             if remote_only:
                 if not remote_berlin_compatible(job):
+                    self._log_filtered_out_job(
+                        reason="remote_incompatible",
+                        job=job,
+                        context=context,
+                        remote_only=remote_only,
+                    )
                     continue
             posted_at = _parse_iso(job.date_created)
             if context.lower_bound and posted_at and posted_at <= context.lower_bound:
+                self._log_filtered_out_job(
+                    reason="before_or_equal_lower_bound",
+                    job=job,
+                    context=context,
+                    remote_only=remote_only,
+                )
                 continue
             if posted_at and posted_at > context.upper_bound:
+                self._log_filtered_out_job(
+                    reason="after_upper_bound",
+                    job=job,
+                    context=context,
+                    remote_only=remote_only,
+                )
                 continue
             normalized_page.append(job)
         LOGGER.info(

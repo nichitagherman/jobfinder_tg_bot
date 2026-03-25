@@ -13,6 +13,7 @@ Local-first Python bot that fetches new jobs from the RapidAPI-hosted JobDataFee
 - Sends a Telegram digest with application links
 - Tracks the last successful fetch window to avoid resending old jobs
 - Writes detailed logs to console and to `runtime/jobfinder.log` by default
+- Writes filtered-out jobs to `runtime/filtered_out_jobs.jsonl` by default
 - Enforces strict API safety caps with these defaults:
   - `MAX_API_REQUESTS_PER_RUN=8`
 
@@ -36,7 +37,7 @@ cp .env.example .env
 3. Edit [`jobfinder_filters.toml`](/Users/nikitagerman/Desktop/jobfinder_tg_bot/jobfinder_filters.toml) to control:
    - which job title variants are matched
    - which notification times are expected, currently `11:00`, `14:00`, and `18:00`
-   - logging stays enabled by default; override `LOG_PATH` in `.env` only if you want the log file elsewhere
+   - logging stays enabled by default; override `LOG_PATH` or `FILTERED_OUT_JOBS_LOG_PATH` in `.env` only if you want the log files elsewhere
 
 4. Run a dry run first:
 
@@ -82,6 +83,8 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 - Notification times also live in `jobfinder_filters.toml`; they control the expected run cadence and the fallback initial fetch window.
 - `MAX_API_REQUESTS_PER_RUN` is the only collection limiter.
 - Detailed logs are enabled by default and go to `runtime/jobfinder.log` plus stdout/stderr.
+- Filtered-out jobs are logged separately as JSON Lines in `runtime/filtered_out_jobs.jsonl`.
+- Each outbound JobDataFeeds call is logged in `runtime/jobfinder.log` as a cURL-like command with the RapidAPI key redacted.
 - The implementation assumes the JobDataFeeds API can be queried with page-based pagination and JSON output.
 - Date filtering is still sent with `dateCreatedMin` / `dateCreatedMax`; for multiple same-day runs this may hit the same calendar day upstream, but the exact SQLite checkpoint and local timestamp filtering still constrain results to the relevant time window.
 - Local Berlin targeting now uses `geoPointLat`, `geoPointLng`, and `geoDistance` rather than `city=Berlin`.
