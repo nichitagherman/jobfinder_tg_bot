@@ -265,8 +265,6 @@ class JobDataFeedsClient:
     ) -> List[NormalizedJob]:
         normalized_page: List[NormalizedJob] = []
         rejected_wrong_title = 0
-        rejected_wrong_location = 0
-        rejected_out_of_window = 0
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
@@ -276,22 +274,17 @@ class JobDataFeedsClient:
                 continue
             if remote_only:
                 if not remote_berlin_compatible(job):
-                    rejected_wrong_location += 1
                     continue
             posted_at = _parse_iso(job.date_created)
             if context.lower_bound and posted_at and posted_at <= context.lower_bound:
-                rejected_out_of_window += 1
                 continue
             if posted_at and posted_at > context.upper_bound:
-                rejected_out_of_window += 1
                 continue
             normalized_page.append(job)
         LOGGER.info(
-            "Normalized page: kept=%s rejected_title=%s rejected_location=%s rejected_window=%s remote_only=%s",
+            "Normalized page: kept=%s rejected_title=%s remote_only=%s",
             len(normalized_page),
             rejected_wrong_title,
-            rejected_wrong_location,
-            rejected_out_of_window,
             remote_only,
         )
         return normalized_page
