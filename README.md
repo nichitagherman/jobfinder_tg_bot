@@ -5,6 +5,7 @@ Local-first Python bot that fetches new jobs from the RapidAPI-hosted JobDataFee
 ## What It Does
 
 - Queries Berlin jobs by default
+- Uses a Berlin-centered geo filter for local jobs instead of an exact `city=Berlin` match
 - Can optionally include a second preset for fully remote jobs that appear compatible with working from Berlin
 - Uses configured notification times to define the intended run schedule and the initial fetch window
 - Stores raw and normalized job data in SQLite
@@ -83,5 +84,6 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 - Detailed logs are enabled by default and go to `runtime/jobfinder.log` plus stdout/stderr.
 - The implementation assumes the JobDataFeeds API can be queried with page-based pagination and JSON output.
 - Date filtering is still sent with `dateCreatedMin` / `dateCreatedMax`; for multiple same-day runs this may hit the same calendar day upstream, but the exact SQLite checkpoint and local timestamp filtering still constrain results to the relevant time window.
+- Local Berlin targeting now uses `geoPointLat`, `geoPointLng`, and `geoDistance` rather than `city=Berlin`.
 - If a run stops before all likely pages are fetched, the DB stores the incomplete titles for that run and the Telegram digest warns about them.
 - If you ever need to recreate the environment instead of cloning it, use `environment.yml`.

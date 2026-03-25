@@ -79,12 +79,16 @@ class Settings:
             "format": "json",
             "countryCode": self.search_country_code,
             "title": title_query,
-            "isActive": "true",
         }
         presets = [
             SearchPreset(
                 name="berlin_all_workplaces",
-                query_params={**common, "city": "Berlin"},
+                query_params={
+                    **common,
+                    "geoPointLat": "52.5200",
+                    "geoPointLng": "13.4050",
+                    "geoDistance": "15mi",
+                },
                 remote_only=False,
             )
         ]

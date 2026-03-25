@@ -171,14 +171,16 @@ class QueryTests(unittest.TestCase):
             )
             self.assertEqual(params["page"], "1")
             self.assertEqual(params["format"], "json")
-            self.assertEqual(params["isActive"], "true")
-            self.assertEqual(params["city"], "Berlin")
+            self.assertEqual(params["geoPointLat"], "52.5200")
+            self.assertEqual(params["geoPointLng"], "13.4050")
+            self.assertEqual(params["geoDistance"], "15mi")
             self.assertEqual(params["dateCreatedMin"], "2025-01-01")
             self.assertEqual(params["dateCreatedMax"], "2025-01-02")
             self.assertEqual(
                 params["title"],
                 '"project manager" OR "project management" OR "business analyst" OR "business analytics" OR "strategy"',
             )
+            self.assertNotIn("isActive", params)
             self.assertNotIn("", params.keys())
 
     def test_client_applies_cooldown_between_requests(self):

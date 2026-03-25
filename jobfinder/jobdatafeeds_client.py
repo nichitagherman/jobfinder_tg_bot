@@ -17,7 +17,7 @@ from .models import FetchSummary, NormalizedJob, RunContext
 
 
 LOGGER = logging.getLogger(__name__)
-REQUEST_COOLDOWN_SECONDS = 1.1
+REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
 
 
