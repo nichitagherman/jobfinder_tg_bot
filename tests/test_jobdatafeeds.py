@@ -296,6 +296,13 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(job.city, "Berlin")
         self.assertEqual(job.work_place, ["remote"])
 
+    def test_normalize_job_rewrites_de_linkedin_host(self):
+        raw = dict(SAMPLE_JOB)
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["url"] = "https://de.linkedin.com/jobs/view/abc123?tracking=1"
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertEqual(job.canonical_url, "https://linkedin.com/jobs/view/abc123?tracking=1")
+
     def test_filters_accept_expected_jobs(self):
         job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
         self.assertTrue(remote_berlin_compatible(job))

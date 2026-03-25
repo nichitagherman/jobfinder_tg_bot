@@ -8,7 +8,7 @@ from datetime import datetime
 import time
 from typing import Deque, Dict, Iterable, List, Optional, Tuple
 from urllib.error import HTTPError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .config import SearchPreset, Settings, build_api_title_query
@@ -64,12 +64,23 @@ def _hash_external_id(raw_job: Dict[str, object], canonical_url: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _normalize_canonical_url(url: str) -> str:
+    if not url:
+        return url
+    parts = urlsplit(url)
+    if parts.netloc.lower() != "de.linkedin.com":
+        return url
+    return urlunsplit((parts.scheme, "linkedin.com", parts.path, parts.query, parts.fragment))
+
+
 def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> NormalizedJob:
     json_ld = raw_job.get("jsonLD") if isinstance(raw_job.get("jsonLD"), dict) else {}
-    canonical_url = (
+    canonical_url = _normalize_canonical_url(
+        (
         str(raw_job.get("externalApplyUrl") or "")
         or str(_get_nested(json_ld, "url") or "")
         or str(raw_job.get("url") or "")
+        )
     )
     external_id = str(_get_nested(json_ld, "identifier") or "")
     if not external_id:
