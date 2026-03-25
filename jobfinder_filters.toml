@@ -1,7 +1,6 @@
 notification_times = [
   "11:00",
-  "14:00",
-  "18:00",
+  "16:00"
 ]
 
 job_titles = [

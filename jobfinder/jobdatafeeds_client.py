@@ -5,7 +5,9 @@ import hashlib
 import json
 import logging
 from datetime import datetime
+import time
 from typing import Deque, Dict, Iterable, List, Optional, Tuple
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -15,6 +17,8 @@ from .models import FetchSummary, NormalizedJob, RunContext
 
 
 LOGGER = logging.getLogger(__name__)
+REQUEST_COOLDOWN_SECONDS = 1.1
+RATE_LIMIT_RETRY_SECONDS = 5.0
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
@@ -186,8 +190,25 @@ def title_matches(job: NormalizedJob, search_titles: Iterable[str]) -> bool:
 class JobDataFeedsClient:
     def __init__(self, settings: Settings):
         self.settings = settings
+        self._last_request_monotonic: float | None = None
+
+    def _sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def _apply_request_cooldown(self) -> None:
+        if self._last_request_monotonic is None:
+            return
+        elapsed = time.monotonic() - self._last_request_monotonic
+        remaining = REQUEST_COOLDOWN_SECONDS - elapsed
+        if remaining > 0:
+            LOGGER.info("Cooling down before next API request: sleep_seconds=%.2f", remaining)
+            self._sleep(remaining)
+
+    def _mark_request_attempt(self) -> None:
+        self._last_request_monotonic = time.monotonic()
 
     def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
+        self._apply_request_cooldown()
         query = urlencode(params)
         LOGGER.info(
             "Requesting JobDataFeeds: page=%s title=%s workPlace=%s dateCreatedMin=%s dateCreatedMax=%s",
@@ -206,8 +227,26 @@ class JobDataFeedsClient:
             },
             method="GET",
         )
-        with urlopen(request, timeout=30) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        attempt = 1
+        while True:
+            self._mark_request_attempt()
+            try:
+                with urlopen(request, timeout=30) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                break
+            except HTTPError as exc:
+                if exc.code == 429 and attempt == 1:
+                    LOGGER.warning(
+                        "JobDataFeeds rate limited the request: page=%s title=%s cooldown_seconds=%.1f retry_attempt=%s",
+                        params.get("page"),
+                        params.get("title"),
+                        RATE_LIMIT_RETRY_SECONDS,
+                        attempt + 1,
+                    )
+                    self._sleep(RATE_LIMIT_RETRY_SECONDS)
+                    attempt += 1
+                    continue
+                raise
         LOGGER.info(
             "JobDataFeeds response received: page=%s totalCount=%s pageSize=%s raw_results=%s",
             params.get("page"),

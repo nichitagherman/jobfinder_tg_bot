@@ -3,6 +3,8 @@ import unittest
 import json
 from datetime import datetime, time, timezone
 from pathlib import Path
+from urllib.error import HTTPError
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from jobfinder.config import load_settings
@@ -179,6 +181,56 @@ class QueryTests(unittest.TestCase):
             )
             self.assertNotIn("", params.keys())
 
+    def test_client_applies_cooldown_between_requests(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path, _ = write_config_files(Path(tmpdir))
+            settings = load_settings(str(env_path))
+            client = CooldownClient(settings)
+            client._last_request_monotonic = 100.0
+            with patch("jobfinder.jobdatafeeds_client.time.monotonic", side_effect=[100.4]):
+                client._apply_request_cooldown()
+            self.assertEqual(len(client.sleep_calls), 1)
+            self.assertGreater(client.sleep_calls[0], 0.69)
+
+    def test_client_retries_once_after_429(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path, _ = write_config_files(Path(tmpdir))
+            settings = load_settings(str(env_path))
+            client = Retry429Client(settings)
+
+            class FakeResponse:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+                def read(self):
+                    return b'{"result": [], "pageSize": 10, "totalCount": 0}'
+
+            responses = [
+                HTTPError(
+                    url=settings.rapidapi_base_url,
+                    code=429,
+                    msg="Too Many Requests",
+                    hdrs=None,
+                    fp=None,
+                ),
+                FakeResponse(),
+            ]
+
+            def fake_urlopen(request, timeout=30):
+                response = responses.pop(0)
+                if isinstance(response, Exception):
+                    raise response
+                return response
+
+            with patch("jobfinder.jobdatafeeds_client.urlopen", side_effect=fake_urlopen):
+                payload = client._perform_request({"page": "1", "title": '"project manager"'})
+
+            self.assertEqual(payload["totalCount"], 0)
+            self.assertEqual(client.sleep_calls, [5.0])
+
 
 class FakeJobDataFeedsClient(JobDataFeedsClient):
     def __init__(self, settings, payloads):
@@ -190,6 +242,32 @@ class FakeJobDataFeedsClient(JobDataFeedsClient):
         self.requests.append(dict(params))
         key = (params.get("title"), int(params["page"]))
         return self.payloads.get(key, {"result": [], "pageSize": 10, "totalCount": 0})
+
+
+class CooldownClient(JobDataFeedsClient):
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.sleep_calls = []
+        self.monotonic_values = iter([100.0, 100.4])
+
+    def _sleep(self, seconds):
+        self.sleep_calls.append(seconds)
+
+
+class Retry429Client(JobDataFeedsClient):
+    def __init__(self, settings):
+        super().__init__(settings)
+        self.sleep_calls = []
+        self.attempts = 0
+
+    def _sleep(self, seconds):
+        self.sleep_calls.append(seconds)
+
+    def _apply_request_cooldown(self):
+        return
+
+    def _mark_request_attempt(self):
+        return
 
 
 def make_raw_job(title: str, identifier: str) -> dict:
