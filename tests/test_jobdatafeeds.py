@@ -9,7 +9,6 @@ from jobfinder.config import load_settings
 from jobfinder.dedupe import choose_canonical, mark_canonical_jobs
 from jobfinder.jobdatafeeds_client import (
     JobDataFeedsClient,
-    berlin_match,
     build_query_params,
     normalize_job,
     remote_berlin_compatible,
@@ -171,6 +170,7 @@ class QueryTests(unittest.TestCase):
             self.assertEqual(params["page"], "1")
             self.assertEqual(params["format"], "json")
             self.assertEqual(params["isActive"], "true")
+            self.assertEqual(params["city"], "Berlin")
             self.assertEqual(params["dateCreatedMin"], "2025-01-01")
             self.assertEqual(params["dateCreatedMax"], "2025-01-02")
             self.assertEqual(
@@ -218,24 +218,7 @@ class NormalizationTests(unittest.TestCase):
 
     def test_filters_accept_expected_jobs(self):
         job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
-        self.assertTrue(berlin_match(job))
         self.assertTrue(remote_berlin_compatible(job))
-
-    def test_berlin_filter_rejects_brandenburg(self):
-        raw = dict(SAMPLE_JOB)
-        raw["city"] = "Potsdam"
-        raw["state"] = "Brandenburg"
-        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
-        raw["jsonLD"]["jobLocation"] = {
-            "name": "Potsdam, Brandenburg, Germany",
-            "address": {
-                "addressLocality": "Potsdam",
-                "addressCountry": "Germany",
-                "addressRegion": "Brandenburg",
-            },
-        }
-        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
-        self.assertFalse(berlin_match(job))
 
     def test_remote_filter_rejects_non_compatible_jobs(self):
         raw = dict(SAMPLE_JOB)

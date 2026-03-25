@@ -84,7 +84,7 @@ class Settings:
         presets = [
             SearchPreset(
                 name="berlin_all_workplaces",
-                query_params=dict(common),
+                query_params={**common, "city": "Berlin"},
                 remote_only=False,
             )
         ]

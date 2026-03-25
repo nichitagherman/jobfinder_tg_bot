@@ -143,21 +143,6 @@ def build_query_params(
     return {key: value for key, value in params.items() if value not in ("", None)}
 
 
-def berlin_match(job: NormalizedJob) -> bool:
-    location_blob = normalize_text(
-        " ".join(
-            [
-                job.city,
-                job.state,
-                job.country_code,
-                str(job.raw_json.get("locale", "")),
-                str(_get_nested(job.raw_json, "jsonLD", "jobLocation", "name") or ""),
-            ]
-        )
-    )
-    return "berlin" in location_blob
-
-
 def remote_berlin_compatible(job: NormalizedJob) -> bool:
     work_blob = normalize_text(" ".join(job.work_place))
     if "remote" not in work_blob:
@@ -252,10 +237,6 @@ class JobDataFeedsClient:
                 continue
             if remote_only:
                 if not remote_berlin_compatible(job):
-                    rejected_wrong_location += 1
-                    continue
-            else:
-                if not berlin_match(job):
                     rejected_wrong_location += 1
                     continue
             posted_at = _parse_iso(job.date_created)
