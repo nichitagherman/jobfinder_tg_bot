@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class NormalizedJob:
     external_id: str
+    collector: str
     portal: str
     source: str
     title: str

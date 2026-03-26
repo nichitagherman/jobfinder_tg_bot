@@ -9,13 +9,18 @@ from zoneinfo import ZoneInfo
 from .config import load_settings
 from .dedupe import mark_canonical_jobs
 from .jobdatafeeds_client import JobDataFeedsClient
+from .jsearch_client import JSearchClient
 from .logging_utils import setup_logging
-from .models import RunContext
+from .models import FetchSummary, RunContext
 from .storage import Storage
 from .telegram_client import TelegramClient, build_digest_messages
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+def _prefix_incomplete_titles(provider: str, titles: list[str]) -> list[str]:
+    return [f"{provider}: {title}" for title in titles]
 
 
 def previous_scheduled_runtime(now_local: datetime, notification_times) -> datetime:
@@ -60,7 +65,9 @@ def run_daily(
     )
 
     storage = Storage(settings.db_path)
-    client = JobDataFeedsClient(settings)
+    clients = [("jobdatafeeds", JobDataFeedsClient(settings))]
+    if settings.jsearch_enabled and settings.jsearch_api_key:
+        clients.append(("jsearch", JSearchClient(settings)))
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_ids)
 
     lower_bound = storage.get_last_checkpoint()
@@ -75,7 +82,33 @@ def run_daily(
     run_id = storage.create_run(upper_bound)
 
     try:
-        fetch_summary = client.fetch_jobs(context, include_remote=include_remote)
+        fetch_jobs = []
+        api_requests_made = 0
+        jobs_fetched = 0
+        was_truncated = False
+        incomplete_titles: list[str] = []
+        for provider_name, client in clients:
+            provider_summary = client.fetch_jobs(context, include_remote=include_remote)
+            LOGGER.info(
+                "Provider fetch summary: provider=%s jobs=%s api_requests=%s truncated=%s incomplete_titles=%s",
+                provider_name,
+                provider_summary.jobs_fetched,
+                provider_summary.api_requests_made,
+                provider_summary.was_truncated_by_request_cap,
+                provider_summary.incomplete_titles,
+            )
+            fetch_jobs.extend(provider_summary.jobs)
+            api_requests_made += provider_summary.api_requests_made
+            jobs_fetched += provider_summary.jobs_fetched
+            was_truncated = was_truncated or provider_summary.was_truncated_by_request_cap
+            incomplete_titles.extend(_prefix_incomplete_titles(provider_name, provider_summary.incomplete_titles))
+        fetch_summary = FetchSummary(
+            jobs=fetch_jobs,
+            api_requests_made=api_requests_made,
+            jobs_fetched=jobs_fetched,
+            was_truncated_by_request_cap=was_truncated,
+            incomplete_titles=incomplete_titles,
+        )
         LOGGER.info(
             "Fetch summary: jobs=%s api_requests=%s truncated=%s incomplete_titles=%s",
             fetch_summary.jobs_fetched,

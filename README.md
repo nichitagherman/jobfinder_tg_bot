@@ -1,6 +1,6 @@
 # Jobfinder Telegram Bot
 
-Local-first Python bot that fetches new jobs from the RapidAPI-hosted JobDataFeeds endpoint, stores them in SQLite, deduplicates overlapping listings, and sends Telegram digests multiple times per day.
+Local-first Python bot that fetches new jobs from RapidAPI-hosted providers including JobDataFeeds and JSearch, stores them in SQLite, deduplicates overlapping listings, and sends Telegram digests multiple times per day.
 
 ## What It Does
 
@@ -15,7 +15,8 @@ Local-first Python bot that fetches new jobs from the RapidAPI-hosted JobDataFee
 - Writes detailed logs to console and to `runtime/jobfinder.log` by default
 - Writes filtered-out jobs to `runtime/filtered_out_jobs.jsonl` by default
 - Enforces strict API safety caps with these defaults:
-  - `MAX_API_REQUESTS_PER_RUN=8`
+  - `JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN=8`
+  - `JSEARCH_MAX_API_REQUESTS_PER_RUN=2`
 
 ## Local Setup
 
@@ -81,12 +82,15 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 
 - Title variants live in `jobfinder_filters.toml`; for local searches the bot now queries them fairly, one title page at a time before deeper pagination.
 - Notification times also live in `jobfinder_filters.toml`; they control the expected run cadence and the fallback initial fetch window.
-- `MAX_API_REQUESTS_PER_RUN` is the only collection limiter.
+- `JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN` limits JobDataFeeds requests per run.
+- `JSEARCH_MAX_API_REQUESTS_PER_RUN` limits JSearch requests per run.
 - Detailed logs are enabled by default and go to `runtime/jobfinder.log` plus stdout/stderr.
 - Filtered-out jobs are logged separately as JSON Lines in `runtime/filtered_out_jobs.jsonl`.
-- Each outbound JobDataFeeds call is logged in `runtime/jobfinder.log` as a cURL-like command with the RapidAPI key redacted.
+- Each outbound JobDataFeeds and JSearch call is logged in `runtime/jobfinder.log` as a provider-specific cURL-like command with the RapidAPI key redacted.
 - The implementation assumes the JobDataFeeds API can be queried with page-based pagination and JSON output.
+- JSearch uses RapidAPI host `jsearch.p.rapidapi.com` and maps the fetch window to the closest supported `date_posted` bucket: `today`, `3days`, `week`, `month`, or `anytime`.
 - Date filtering is still sent with `dateCreatedMin` / `dateCreatedMax`; for multiple same-day runs this may hit the same calendar day upstream, but the exact SQLite checkpoint and local timestamp filtering still constrain results to the relevant time window.
 - Local Berlin targeting now uses `geoPointLat`, `geoPointLng`, and `geoDistance` rather than `city=Berlin`.
 - If a run stops before all likely pages are fetched, the DB stores the incomplete titles for that run and the Telegram digest warns about them.
+- The `jobs` table has a dedicated `collector` column so you can distinguish rows inserted by `jobdatafeeds` vs `jsearch` without overloading upstream `source`.
 - If you ever need to recreate the environment instead of cloning it, use `environment.yml`.

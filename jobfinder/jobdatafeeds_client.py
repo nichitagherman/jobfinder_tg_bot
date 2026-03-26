@@ -19,6 +19,7 @@ from .models import FetchSummary, NormalizedJob, RunContext
 
 LOGGER = logging.getLogger(__name__)
 FILTERED_OUT_LOGGER = logging.getLogger(FILTERED_OUT_LOGGER_NAME)
+PROVIDER_NAME = "jobdatafeeds"
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
 _SENIORITY_EXCLUDED_PHRASES = (
@@ -120,6 +121,7 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> Normalize
 
     return NormalizedJob(
         external_id=external_id,
+        collector=PROVIDER_NAME,
         portal=str(raw_job.get("portal") or ""),
         source=str(raw_job.get("source") or ""),
         title=str(raw_job.get("title") or _get_nested(json_ld, "title") or ""),
@@ -256,6 +258,7 @@ class JobDataFeedsClient:
             json.dumps(
                 {
                     "reason": reason,
+                    "provider": PROVIDER_NAME,
                     "title": job.title,
                     "company": job.company,
                     "portal": job.portal,
@@ -286,14 +289,15 @@ class JobDataFeedsClient:
             "--header 'x-rapidapi-key: [REDACTED]'"
         )
         LOGGER.info(
-            "Requesting JobDataFeeds: page=%s title=%s workPlace=%s dateCreatedMin=%s dateCreatedMax=%s",
+            "Requesting JobDataFeeds: provider=%s page=%s title=%s workPlace=%s dateCreatedMin=%s dateCreatedMax=%s",
+            PROVIDER_NAME,
             params.get("page"),
             params.get("title"),
             params.get("workPlace", ""),
             params.get("dateCreatedMin", ""),
             params.get("dateCreatedMax", ""),
         )
-        LOGGER.info("JobDataFeeds cURL: %s", curl_like)
+        LOGGER.info("JobDataFeeds cURL provider=%s: %s", PROVIDER_NAME, curl_like)
         request = Request(
             f"{self.settings.rapidapi_base_url}?{query}",
             headers={
@@ -348,7 +352,7 @@ class JobDataFeedsClient:
             if not title_matches(job, self.settings.search_titles):
                 rejected_wrong_title += 1
                 self._log_filtered_out_job(
-                    reason="title_mismatch",
+                    reason=f"{PROVIDER_NAME}_title_mismatch",
                     job=job,
                     context=context,
                     remote_only=remote_only,
@@ -357,7 +361,7 @@ class JobDataFeedsClient:
             seniority_markers = excluded_by_seniority_title(job)
             if seniority_markers:
                 self._log_filtered_out_job(
-                    reason="seniority_title_excluded",
+                    reason=f"{PROVIDER_NAME}_seniority_title_excluded",
                     job=job,
                     context=context,
                     remote_only=remote_only,
@@ -367,7 +371,7 @@ class JobDataFeedsClient:
             if remote_only:
                 if not remote_berlin_compatible(job):
                     self._log_filtered_out_job(
-                        reason="remote_incompatible",
+                        reason=f"{PROVIDER_NAME}_remote_incompatible",
                         job=job,
                         context=context,
                         remote_only=remote_only,
@@ -376,7 +380,7 @@ class JobDataFeedsClient:
             posted_at = _parse_iso(job.date_created)
             if context.lower_bound and posted_at and posted_at <= context.lower_bound:
                 self._log_filtered_out_job(
-                    reason="before_or_equal_lower_bound",
+                    reason=f"{PROVIDER_NAME}_before_or_equal_lower_bound",
                     job=job,
                     context=context,
                     remote_only=remote_only,
@@ -384,7 +388,7 @@ class JobDataFeedsClient:
                 continue
             if posted_at and posted_at > context.upper_bound:
                 self._log_filtered_out_job(
-                    reason="after_upper_bound",
+                    reason=f"{PROVIDER_NAME}_after_upper_bound",
                     job=job,
                     context=context,
                     remote_only=remote_only,
@@ -411,12 +415,12 @@ class JobDataFeedsClient:
         queue: Deque[tuple[str, int]] = deque((title, 1) for title in self.settings.search_titles)
 
         while queue:
-            if api_requests_made >= self.settings.max_api_requests_per_run:
+            if api_requests_made >= self.settings.jobdatafeeds_max_api_requests_per_run:
                 truncated_by_request_cap = True
                 incomplete_titles.update(title for title, _ in queue)
                 LOGGER.warning(
                     "Request cap reached for local fetch: cap=%s incomplete_titles=%s",
-                    self.settings.max_api_requests_per_run,
+                    self.settings.jobdatafeeds_max_api_requests_per_run,
                     sorted(incomplete_titles),
                 )
                 break
@@ -473,12 +477,12 @@ class JobDataFeedsClient:
 
         page = 1
         while True:
-            if api_requests_made >= self.settings.max_api_requests_per_run:
+            if api_requests_made >= self.settings.jobdatafeeds_max_api_requests_per_run:
                 truncated_by_request_cap = True
                 LOGGER.warning(
                     "Request cap reached for preset fetch: preset=%s cap=%s",
                     preset.name,
-                    self.settings.max_api_requests_per_run,
+                    self.settings.jobdatafeeds_max_api_requests_per_run,
                 )
                 break
 
@@ -530,7 +534,7 @@ class JobDataFeedsClient:
             "Starting fetch cycle: include_remote=%s presets=%s request_cap=%s titles=%s lower_bound=%s upper_bound=%s",
             include_remote,
             [preset.name for preset in self.settings.build_presets(include_remote=include_remote)],
-            self.settings.max_api_requests_per_run,
+            self.settings.jobdatafeeds_max_api_requests_per_run,
             self.settings.search_titles,
             context.lower_bound.isoformat() if context.lower_bound else None,
             context.upper_bound.isoformat(),

@@ -17,6 +17,8 @@ from jobfinder.jobdatafeeds_client import (
     remote_berlin_compatible,
     title_matches,
 )
+from jobfinder.jsearch_client import JSearchClient, normalize_job as normalize_jsearch_job, select_date_posted
+import jobfinder.runner as runner_module
 from jobfinder.runner import _sort_jobs_for_output, previous_scheduled_runtime
 from jobfinder.storage import Storage
 from jobfinder.telegram_client import build_digest_messages
@@ -65,6 +67,33 @@ SAMPLE_JOB = {
         },
         "datePosted": "2025-01-22",
     },
+}
+
+SAMPLE_JSEARCH_JOB = {
+    "job_id": "mTqkb_t5iIrrC7xqAAAAAA==",
+    "job_title": "PMO-Manager:in - Turnaround Programm – Berlin",
+    "employer_name": "Stadler",
+    "job_publisher": "LinkedIn",
+    "job_employment_type": "Vollzeit",
+    "job_employment_types": ["FULLTIME"],
+    "job_apply_link": "https://de.linkedin.com/jobs/view/pmo-manager-in-turnaround-programm-%E2%80%93-berlin-at-stadler-4390701473",
+    "job_apply_is_direct": False,
+    "apply_options": [
+        {
+            "apply_link": "https://de.linkedin.com/jobs/view/pmo-manager-in-turnaround-programm-%E2%80%93-berlin-at-stadler-4390701473",
+            "is_direct": False,
+            "publisher": "LinkedIn",
+        }
+    ],
+    "job_description": "Project manager role in Berlin.",
+    "job_is_remote": False,
+    "job_posted_at": "vor 5 Stunden",
+    "job_posted_at_datetime_utc": "2026-03-26T11:00:00.000Z",
+    "job_location": "Berlin • über LinkedIn",
+    "job_city": None,
+    "job_state": None,
+    "job_country": None,
+    "job_google_link": "https://www.google.com/search?ibp=htl;jobs&q=project+manager+in+Berlin",
 }
 
 
@@ -120,7 +149,7 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             env_path, _ = write_config_files(Path(tmpdir))
             settings = load_settings(str(env_path))
-            self.assertEqual(settings.max_api_requests_per_run, 2)
+            self.assertEqual(settings.jobdatafeeds_max_api_requests_per_run, 2)
             self.assertEqual(len(settings.build_presets()), 2)
             self.assertEqual(settings.telegram_chat_ids, ["12345"])
             self.assertEqual(
@@ -177,6 +206,29 @@ class ConfigTests(unittest.TestCase):
             )
             settings = load_settings(str(env_path))
             self.assertEqual(settings.telegram_chat_ids, ["12345", "67890"])
+
+    def test_load_settings_supports_optional_jsearch(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env_path, _ = write_config_files(root)
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "JOBDATAFEEDS_API_TOKEN=test-token",
+                        "TELEGRAM_BOT_TOKEN=test-bot",
+                        "TELEGRAM_CHAT_ID=12345",
+                        "ENABLE_JSEARCH=true",
+                        "JSEARCH_API_KEY=jsearch-token",
+                        "JSEARCH_MAX_API_REQUESTS_PER_RUN=4",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            settings = load_settings(str(env_path))
+            self.assertTrue(settings.jsearch_enabled)
+            self.assertEqual(settings.jsearch_api_key, "jsearch-token")
+            self.assertEqual(settings.jsearch_api_host, "jsearch.p.rapidapi.com")
+            self.assertEqual(settings.jsearch_max_api_requests_per_run, 4)
 
 
 class ScheduleTests(unittest.TestCase):
@@ -307,6 +359,18 @@ class Retry429Client(JobDataFeedsClient):
         return
 
 
+class FakeJSearchClient(JSearchClient):
+    def __init__(self, settings, payloads):
+        super().__init__(settings)
+        self.payloads = payloads
+        self.requests = []
+
+    def _perform_request(self, params):
+        self.requests.append(dict(params))
+        key = (params.get("query"), int(params["page"]), params.get("work_from_home", "false"))
+        return self.payloads.get(key, {"status": "OK", "data": []})
+
+
 def make_raw_job(title: str, identifier: str) -> dict:
     raw = dict(SAMPLE_JOB)
     raw["dateCreated"] = "2026-03-24T12:00:00.000Z"
@@ -325,6 +389,7 @@ def make_raw_job(title: str, identifier: str) -> dict:
 class NormalizationTests(unittest.TestCase):
     def test_normalize_job_maps_payload(self):
         job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertEqual(job.collector, "jobdatafeeds")
         self.assertEqual(job.external_id, "abc123")
         self.assertEqual(job.canonical_url, "https://www.linkedin.com/jobs/view/abc123")
         self.assertEqual(job.company, "Microsoft")
@@ -403,6 +468,57 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(excluded_by_seniority_title(job), [])
 
 
+class JSearchTests(unittest.TestCase):
+    def test_select_date_posted_uses_smallest_supported_bucket(self):
+        context = type(
+            "Ctx",
+            (),
+            {
+                "lower_bound": datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+            },
+        )()
+        self.assertEqual(select_date_posted(context), "today")
+
+        context = type(
+            "Ctx",
+            (),
+            {
+                "lower_bound": datetime(2026, 3, 20, 9, 0, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+            },
+        )()
+        self.assertEqual(select_date_posted(context), "week")
+
+        context = type("Ctx", (), {"lower_bound": None, "upper_bound": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)})()
+        self.assertEqual(select_date_posted(context), "anytime")
+
+    def test_normalize_jsearch_job_maps_payload(self):
+        job = normalize_jsearch_job(SAMPLE_JSEARCH_JOB, datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(job.collector, "jsearch")
+        self.assertEqual(job.external_id, SAMPLE_JSEARCH_JOB["job_id"])
+        self.assertEqual(job.portal, "linkedin")
+        self.assertEqual(job.source, "jsearch")
+        self.assertEqual(job.work_place, [])
+        self.assertEqual(job.work_type, ["fulltime"])
+        self.assertEqual(
+            job.canonical_url,
+            "https://linkedin.com/jobs/view/pmo-manager-in-turnaround-programm-%E2%80%93-berlin-at-stadler-4390701473",
+        )
+
+    def test_normalize_jsearch_job_prefers_direct_apply_option(self):
+        raw = dict(SAMPLE_JSEARCH_JOB)
+        raw["job_apply_link"] = "https://example.com/fallback"
+        raw["job_apply_is_direct"] = False
+        raw["apply_options"] = [
+            {"publisher": "Indeed", "apply_link": "https://example.com/non-direct", "is_direct": False},
+            {"publisher": "XING", "apply_link": "https://example.com/direct", "is_direct": True},
+        ]
+        job = normalize_jsearch_job(raw, datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc))
+        self.assertEqual(job.canonical_url, "https://example.com/direct")
+        self.assertTrue(job.is_direct)
+
+
 class DedupeTests(unittest.TestCase):
     def _job(self, portal, source, url, title="Project Management Lead", company="Microsoft"):
         base = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
@@ -454,6 +570,7 @@ class StorageTests(unittest.TestCase):
             storage.upsert_jobs([job])
             jobs = storage.get_all_jobs()
             self.assertEqual(len(jobs), 1)
+            self.assertEqual(jobs[0].collector, "jobdatafeeds")
             self.assertEqual(jobs[0].title, "Project Management Lead")
 
     def test_finalize_run_persists_incomplete_titles_and_query_count(self):
@@ -488,7 +605,7 @@ class FetchSchedulingTests(unittest.TestCase):
                     "JOBDATAFEEDS_API_TOKEN=test-token",
                     "TELEGRAM_BOT_TOKEN=test-bot",
                     "TELEGRAM_CHAT_ID=12345",
-                    f"MAX_API_REQUESTS_PER_RUN={max_requests}",
+                    f"JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN={max_requests}",
                 ]
             ),
             encoding="utf-8",
@@ -554,6 +671,179 @@ class FetchSchedulingTests(unittest.TestCase):
             summary = client.fetch_jobs(context, include_remote=False)
             self.assertTrue(summary.was_truncated_by_request_cap)
             self.assertEqual(summary.incomplete_titles, ["beta", "gamma"])
+
+
+class JSearchFetchTests(unittest.TestCase):
+    def _settings(self, root: Path, *, max_requests: int = 5):
+        env_path = root / ".env"
+        env_path.write_text(
+            "\n".join(
+                [
+                    "JOBDATAFEEDS_API_TOKEN=test-token",
+                    "TELEGRAM_BOT_TOKEN=test-bot",
+                    "TELEGRAM_CHAT_ID=12345",
+                    "ENABLE_JSEARCH=true",
+                    "JSEARCH_API_KEY=test-jsearch-token",
+                    f"JSEARCH_MAX_API_REQUESTS_PER_RUN={max_requests}",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        filters = root / "jobfinder_filters.toml"
+        filters.write_text(
+            "\n".join(
+                [
+                    'notification_times = ["11:00", "14:00", "18:00"]',
+                    'job_titles = ["alpha", "beta", "gamma"]',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return load_settings(str(env_path), filters_path=str(filters))
+
+    def test_fetch_jobs_gives_every_title_page_one_before_page_two(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = self._settings(Path(tmpdir), max_requests=5)
+            payloads = {
+                ("alpha in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a1-{i}") for i in range(10)]},
+                ("beta in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Beta role", job_id=f"b1-{i}") for i in range(3)]},
+                ("gamma in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma role", job_id=f"g1-{i}") for i in range(10)]},
+                ("alpha in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a2-{i}") for i in range(2)]},
+                ("gamma in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma role", job_id=f"g2-{i}") for i in range(2)]},
+            }
+            client = FakeJSearchClient(settings, payloads)
+            context = type("Ctx", (), {
+                "started_at": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+                "lower_bound": datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc),
+            })()
+            summary = client.fetch_jobs(context, include_remote=False)
+            seen = [(req["query"], req["page"]) for req in client.requests]
+            self.assertEqual(
+                seen,
+                [("alpha in Berlin", "1"), ("beta in Berlin", "1"), ("gamma in Berlin", "1"), ("alpha in Berlin", "2"), ("gamma in Berlin", "2")],
+            )
+            self.assertEqual(summary.api_requests_made, 5)
+
+    def test_fetch_jobs_marks_incomplete_titles_when_request_cap_hits(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = self._settings(Path(tmpdir), max_requests=4)
+            payloads = {
+                ("alpha in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a1-{i}") for i in range(10)]},
+                ("beta in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Beta role", job_id=f"b1-{i}") for i in range(10)]},
+                ("gamma in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma role", job_id=f"g1-{i}") for i in range(10)]},
+                ("alpha in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a2-{i}") for i in range(2)]},
+            }
+            client = FakeJSearchClient(settings, payloads)
+            context = type("Ctx", (), {
+                "started_at": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+                "lower_bound": datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc),
+            })()
+            summary = client.fetch_jobs(context, include_remote=False)
+            self.assertTrue(summary.was_truncated_by_request_cap)
+            self.assertEqual(summary.incomplete_titles, ["beta", "gamma"])
+
+
+class RunnerAggregationTests(unittest.TestCase):
+    def test_run_daily_aggregates_provider_summaries(self):
+        class FakeStorage:
+            last_instance = None
+
+            def __init__(self, db_path):
+                self.db_path = db_path
+                self.finalized = None
+                FakeStorage.last_instance = self
+
+            def get_last_checkpoint(self):
+                return datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc)
+
+            def create_run(self, started_at):
+                return 1
+
+            def upsert_jobs(self, jobs):
+                self.jobs = list(jobs)
+                return len(jobs)
+
+            def get_all_jobs(self):
+                return list(self.jobs)
+
+            def update_canonical_flags(self, canonical_urls):
+                self.canonical_urls = list(canonical_urls)
+
+            def get_unsent_canonical_jobs(self):
+                return []
+
+            def mark_jobs_sent(self, canonical_urls, sent_at):
+                self.sent = (list(canonical_urls), sent_at)
+
+            def update_checkpoint(self, upper_bound):
+                self.checkpoint = upper_bound
+
+            def finalize_run(self, run_id, **kwargs):
+                self.finalized = kwargs
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, chat_ids):
+                self.bot_token = bot_token
+                self.chat_ids = chat_ids
+
+            def send_messages(self, messages):
+                return datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+
+        class FakeJobDataFeedsClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                return runner_module.FetchSummary(
+                    jobs=[normalize_job(SAMPLE_JOB, context.started_at)],
+                    api_requests_made=2,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=["alpha"],
+                )
+
+        class FakeJSearchClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                return runner_module.FetchSummary(
+                    jobs=[normalize_jsearch_job(SAMPLE_JSEARCH_JOB, context.started_at)],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=True,
+                    incomplete_titles=["beta"],
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path, filters_path = write_config_files(Path(tmpdir))
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "JOBDATAFEEDS_API_TOKEN=test-token",
+                        "TELEGRAM_BOT_TOKEN=test-bot",
+                        "TELEGRAM_CHAT_ID=12345",
+                        "ENABLE_JSEARCH=true",
+                        "JSEARCH_API_KEY=test-jsearch-token",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(runner_module, "setup_logging"), patch.object(runner_module, "Storage", FakeStorage), patch.object(runner_module, "TelegramClient", FakeTelegramClient), patch.object(runner_module, "JobDataFeedsClient", FakeJobDataFeedsClientForRunner), patch.object(runner_module, "JSearchClient", FakeJSearchClientForRunner):
+                exit_code = runner_module.run_daily(str(env_path), dry_run=True, filters_path=str(filters_path))
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(FakeStorage.last_instance.finalized["api_requests_made"], 3)
+            self.assertEqual(FakeStorage.last_instance.finalized["jobs_fetched"], 2)
+            self.assertTrue(FakeStorage.last_instance.finalized["was_truncated_by_request_cap"])
+            self.assertEqual(
+                FakeStorage.last_instance.finalized["incomplete_titles"],
+                ["jobdatafeeds: alpha", "jsearch: beta"],
+            )
 
 
 class TelegramTests(unittest.TestCase):

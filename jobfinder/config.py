@@ -72,12 +72,16 @@ class SearchPreset:
 class Settings:
     jobdatafeeds_api_key: str
     jobdatafeeds_api_host: str
+    jsearch_enabled: bool
+    jsearch_api_key: Optional[str]
+    jsearch_api_host: str
     telegram_bot_token: str
     telegram_chat_ids: List[str]
     db_path: Path
     timezone: str
     notification_times: List[time]
-    max_api_requests_per_run: int
+    jobdatafeeds_max_api_requests_per_run: int
+    jsearch_max_api_requests_per_run: int
     search_titles: List[str]
     priority_companies: List[str]
     search_country_code: str
@@ -92,6 +96,10 @@ class Settings:
     @property
     def rapidapi_base_url(self) -> str:
         return f"https://{self.jobdatafeeds_api_host}/api/v2/jobs/search"
+
+    @property
+    def jsearch_base_url(self) -> str:
+        return f"https://{self.jsearch_api_host}/search"
 
     def build_presets(self, *, include_remote: bool = True) -> List[SearchPreset]:
         title_query = " OR ".join(build_api_title_query(title) for title in self.search_titles)
@@ -206,12 +214,16 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         jobdatafeeds_api_host=os.getenv(
             "JOBDATAFEEDS_API_HOST", "daily-international-job-postings.p.rapidapi.com"
         ),
+        jsearch_enabled=_get_bool("ENABLE_JSEARCH", False),
+        jsearch_api_key=_get_optional("JSEARCH_API_KEY"),
+        jsearch_api_host=os.getenv("JSEARCH_API_HOST", "jsearch.p.rapidapi.com"),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
         telegram_chat_ids=telegram_chat_ids,
         db_path=db_path,
         timezone=os.getenv("TIMEZONE", "Europe/Berlin"),
         notification_times=load_notification_times(resolved_filters_path),
-        max_api_requests_per_run=_get_int("MAX_API_REQUESTS_PER_RUN", 2),
+        jobdatafeeds_max_api_requests_per_run=_get_int("JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN", 2),
+        jsearch_max_api_requests_per_run=_get_int("JSEARCH_MAX_API_REQUESTS_PER_RUN", 2),
         search_titles=load_filter_titles(resolved_filters_path),
         priority_companies=load_priority_companies(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
