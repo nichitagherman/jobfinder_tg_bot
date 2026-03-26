@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import html
 import json
 import logging
 from datetime import datetime
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence
 from urllib.request import Request, urlopen
 
 
@@ -11,14 +12,31 @@ MAX_MESSAGE_LENGTH = 4000
 LOGGER = logging.getLogger(__name__)
 
 
-def _chunks(lines: Sequence[str]) -> List[str]:
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+
+def _format_timestamp(value: Optional[str]) -> str:
+    parsed = _parse_timestamp(value)
+    if parsed is None:
+        return value or ""
+    return parsed.astimezone().strftime("%d.%m.%Y %H:%M")
+
+
+def _chunks_blocks(blocks: Sequence[str]) -> List[str]:
     messages: List[str] = []
     current = ""
-    for line in lines:
-        candidate = f"{current}\n{line}".strip() if current else line
+    for block in blocks:
+        candidate = f"{current}\n\n{block}".strip() if current else block
         if len(candidate) > MAX_MESSAGE_LENGTH and current:
             messages.append(current)
-            current = line
+            current = block
         else:
             current = candidate
     if current:
@@ -27,15 +45,15 @@ def _chunks(lines: Sequence[str]) -> List[str]:
 
 
 def format_job_line(row) -> str:
-    workplace = ", ".join(json.loads(row["work_place_json"])) or "n/a"
-    location = ", ".join(part for part in (row["city"], row["state"], row["country_code"]) if part) or "Remote"
-    posted = row["date_created"] or row["fetched_at"]
+    posted = _format_timestamp(row["date_created"] or row["fetched_at"])
+    title = html.escape(row["title"])
+    company = html.escape(row["company"])
+    apply_url = html.escape(row["canonical_url"], quote=True)
     return (
-        f"*{row['title']}*\n"
-        f"{row['company']} | {row['portal']}/{row['source']}\n"
-        f"{workplace} | {location}\n"
+        f"<b>{title}</b>\n"
+        f"<i>{company}</i>\n"
         f"Posted: {posted}\n"
-        f"Apply: {row['canonical_url']}"
+        f"Apply: {apply_url}"
     )
 
 
@@ -44,18 +62,32 @@ def build_digest_messages(
     *,
     truncated: bool,
     empty_notice: bool,
+    lower_bound: Optional[datetime] = None,
+    upper_bound: Optional[datetime] = None,
     incomplete_titles: Sequence[str] | None = None,
 ) -> List[str]:
     if not rows:
         return ["No new matching jobs were found in the last run."] if empty_notice else []
 
-    header = "Daily job digest"
+    if lower_bound and upper_bound:
+        header = (
+            "Jobs posted from "
+            f"{lower_bound.astimezone().strftime('%d.%m.%Y %H:%M')}-"
+            f"{upper_bound.astimezone().strftime('%d.%m.%Y %H:%M')}"
+        )
+    else:
+        header = "Jobs posted from unknown-unknown"
+
+    blocks = [header]
+    blocks.extend(format_job_line(row) for row in rows)
+
     if truncated:
-        header += "\nWarning: the fetch stopped early because the configured request cap was reached."
+        warning = "Warning: the fetch stopped early because the configured request cap was reached."
         if incomplete_titles:
-            header += f"\nIncomplete titles: {', '.join(incomplete_titles)}"
-    lines = [header, ""] + [format_job_line(row) for row in rows]
-    return _chunks(lines)
+            warning += f"\nIncomplete titles: {', '.join(incomplete_titles)}"
+        blocks.append(warning)
+
+    return _chunks_blocks(blocks)
 
 
 class TelegramClient:
@@ -82,8 +114,8 @@ class TelegramClient:
                 {
                     "chat_id": self.chat_id,
                     "text": message,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": False,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True,
                 }
             ).encode("utf-8")
             request = Request(

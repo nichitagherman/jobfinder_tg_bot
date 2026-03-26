@@ -495,12 +495,60 @@ class TelegramTests(unittest.TestCase):
 
     def test_truncated_digest_mentions_incomplete_titles(self):
         messages = build_digest_messages(
-            [{"work_place_json": "[]", "city": "Berlin", "state": "Berlin", "country_code": "de", "date_created": "2025-01-01", "fetched_at": "2025-01-01", "title": "Role", "company": "Comp", "portal": "linkedin", "source": "x", "canonical_url": "https://example.com"}],
+            [{"work_place_json": "[]", "city": "Berlin", "state": "Berlin", "country_code": "de", "date_created": "2025-01-01T18:00:00+00:00", "fetched_at": "2025-01-01T18:00:00+00:00", "title": "Role", "company": "Comp", "portal": "linkedin", "source": "x", "canonical_url": "https://example.com"}],
             truncated=True,
             empty_notice=True,
+            lower_bound=datetime(2025, 1, 1, 17, 0, tzinfo=timezone.utc),
+            upper_bound=datetime(2025, 1, 1, 18, 0, tzinfo=timezone.utc),
             incomplete_titles=["strategy", "business analyst"],
         )
+        self.assertIn("Jobs posted from 01.01.2025 18:00-01.01.2025 19:00", messages[0])
         self.assertIn("Incomplete titles: strategy, business analyst", messages[0])
+        self.assertIn("<b>Role</b>", messages[0])
+        self.assertIn("<i>Comp</i>", messages[0])
+        self.assertIn("Posted: 01.01.2025 19:00", messages[0])
+        self.assertIn("Jobs posted from 01.01.2025 18:00-01.01.2025 19:00\n\n<b>Role</b>", messages[0])
+        self.assertTrue(messages[0].endswith("Incomplete titles: strategy, business analyst"))
+
+    def test_multiple_jobs_are_separated_by_blank_lines(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role One",
+                "company": "Comp One",
+                "portal": "linkedin",
+                "source": "x",
+                "canonical_url": "https://example.com/1",
+            },
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T19:00:00+00:00",
+                "fetched_at": "2025-01-01T19:00:00+00:00",
+                "title": "Role Two",
+                "company": "Comp Two",
+                "portal": "linkedin",
+                "source": "x",
+                "canonical_url": "https://example.com/2",
+            },
+        ]
+        messages = build_digest_messages(
+            rows,
+            truncated=False,
+            empty_notice=True,
+            lower_bound=datetime(2025, 1, 1, 17, 0, tzinfo=timezone.utc),
+            upper_bound=datetime(2025, 1, 1, 19, 0, tzinfo=timezone.utc),
+        )
+        self.assertIn("<b>Role One</b>\n<i>Comp One</i>", messages[0])
+        self.assertIn("<b>Role Two</b>\n<i>Comp Two</i>", messages[0])
+        self.assertIn("Apply: https://example.com/1\n\n<b>Role Two</b>", messages[0])
 
 
 if __name__ == "__main__":

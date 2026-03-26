@@ -58,7 +58,6 @@ def run_daily(
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
 
     lower_bound = storage.get_last_checkpoint()
-    lower_bound = None
     if lower_bound is None:
         lower_bound = previous_scheduled_runtime(now_local, settings.notification_times).astimezone(
             timezone.utc
@@ -89,6 +88,8 @@ def run_daily(
             unsent_rows,
             truncated=fetch_summary.was_truncated_by_request_cap,
             empty_notice=True,
+            lower_bound=context.lower_bound,
+            upper_bound=context.upper_bound,
             incomplete_titles=fetch_summary.incomplete_titles,
         )
         LOGGER.info(
