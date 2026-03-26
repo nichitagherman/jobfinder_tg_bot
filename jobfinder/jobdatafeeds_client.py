@@ -87,7 +87,7 @@ def _normalize_canonical_url(url: str) -> str:
     return urlunsplit((parts.scheme, "linkedin.com", parts.path, parts.query, parts.fragment))
 
 
-def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> NormalizedJob:
+def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_text: str = "") -> NormalizedJob:
     json_ld = raw_job.get("jsonLD") if isinstance(raw_job.get("jsonLD"), dict) else {}
     canonical_url = _normalize_canonical_url(
         (
@@ -122,6 +122,7 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> Normalize
     return NormalizedJob(
         external_id=external_id,
         collector=PROVIDER_NAME,
+        query_text=query_text,
         portal=str(raw_job.get("portal") or ""),
         source=str(raw_job.get("source") or ""),
         title=str(raw_job.get("title") or _get_nested(json_ld, "title") or ""),
@@ -261,6 +262,7 @@ class JobDataFeedsClient:
                     "provider": PROVIDER_NAME,
                     "title": job.title,
                     "company": job.company,
+                    "query_text": job.query_text,
                     "portal": job.portal,
                     "source": job.source,
                     "city": job.city,
@@ -342,13 +344,14 @@ class JobDataFeedsClient:
         context: RunContext,
         *,
         remote_only: bool,
+        query_text: str,
     ) -> List[NormalizedJob]:
         normalized_page: List[NormalizedJob] = []
         rejected_wrong_title = 0
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
-            job = normalize_job(raw_item, context.started_at)
+            job = normalize_job(raw_item, context.started_at, query_text=query_text)
             if not title_matches(job, self.settings.search_titles):
                 rejected_wrong_title += 1
                 self._log_filtered_out_job(
@@ -439,7 +442,7 @@ class JobDataFeedsClient:
             if not isinstance(result, list):
                 result = []
 
-            normalized_page = self._normalize_page_jobs(result, context, remote_only=False)
+            normalized_page = self._normalize_page_jobs(result, context, remote_only=False, query_text=title)
             page_size = int(payload.get("pageSize", 10) or 10)
             has_more_pages = bool(result) and page_size > 0 and len(result) >= page_size
             jobs.extend(normalized_page)
@@ -494,7 +497,12 @@ class JobDataFeedsClient:
                 LOGGER.info("Preset fetch ended: preset=%s page=%s raw_results=0", preset.name, page)
                 break
 
-            normalized_page = self._normalize_page_jobs(result, context, remote_only=preset.remote_only)
+            normalized_page = self._normalize_page_jobs(
+                result,
+                context,
+                remote_only=preset.remote_only,
+                query_text=str(params.get("title") or preset.name),
+            )
             jobs.extend(normalized_page)
             LOGGER.info(
                 "Preset page processed: preset=%s page=%s kept=%s raw=%s",

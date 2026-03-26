@@ -93,4 +93,6 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 - Local Berlin targeting now uses `geoPointLat`, `geoPointLng`, and `geoDistance` rather than `city=Berlin`.
 - If a run stops before all likely pages are fetched, the DB stores the incomplete titles for that run and the Telegram digest warns about them.
 - The `jobs` table has a dedicated `collector` column so you can distinguish rows inserted by `jobdatafeeds` vs `jsearch` without overloading upstream `source`.
+- The `jobs` table also stores `query_text`, the exact title/query string that produced the row, such as `operations` or `project manager in Berlin`.
+- Filtered-out job log entries also include `query_text` so you can see which search produced a rejected candidate.
 - If you ever need to recreate the environment instead of cloning it, use `environment.yml`.

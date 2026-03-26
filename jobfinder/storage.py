@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     external_id TEXT NOT NULL,
     collector TEXT NOT NULL DEFAULT 'jobdatafeeds',
+    query_text TEXT NOT NULL DEFAULT '',
     portal TEXT NOT NULL,
     source TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -90,6 +91,10 @@ class Storage:
                     "ALTER TABLE jobs ADD COLUMN collector TEXT NOT NULL DEFAULT 'jobdatafeeds'"
                 )
                 conn.execute("UPDATE jobs SET collector = 'jobdatafeeds' WHERE collector = '' OR collector IS NULL")
+            if "query_text" not in job_columns:
+                conn.execute(
+                    "ALTER TABLE jobs ADD COLUMN query_text TEXT NOT NULL DEFAULT ''"
+                )
             if "incomplete_titles_json" not in run_columns:
                 conn.execute(
                     "ALTER TABLE runs ADD COLUMN incomplete_titles_json TEXT NOT NULL DEFAULT '[]'"
@@ -194,14 +199,15 @@ class Storage:
                 cursor = conn.execute(
                     """
                     INSERT INTO jobs (
-                        external_id, collector, portal, source, title, company, country_code, state, city,
+                        external_id, collector, query_text, portal, source, title, company, country_code, state, city,
                         timezone, timezone_offset, work_place_json, work_type_json, contract_type_json,
                         career_level_json, occupation, industry, language, is_direct, is_recruiter,
                         date_created, date_active, date_expired, canonical_url, description,
                         duplicate_fingerprint, is_canonical, sent_at, fetched_at, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(portal, source, external_id) DO UPDATE SET
                         collector = excluded.collector,
+                        query_text = excluded.query_text,
                         title = excluded.title,
                         company = excluded.company,
                         country_code = excluded.country_code,
@@ -230,6 +236,7 @@ class Storage:
                     (
                         job.external_id,
                         job.collector,
+                        job.query_text,
                         job.portal,
                         job.source,
                         job.title,
@@ -313,6 +320,7 @@ class Storage:
         return NormalizedJob(
             external_id=row["external_id"],
             collector=row["collector"],
+            query_text=row["query_text"],
             portal=row["portal"],
             source=row["source"],
             title=row["title"],

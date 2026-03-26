@@ -90,7 +90,7 @@ def _hash_external_id(raw_job: Dict[str, object], canonical_url: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> NormalizedJob:
+def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_text: str = "") -> NormalizedJob:
     canonical_url, is_direct = _choose_apply_url(raw_job)
     external_id = str(raw_job.get("job_id") or "").strip()
     if not external_id:
@@ -112,6 +112,7 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> Normalize
     return NormalizedJob(
         external_id=external_id,
         collector=PROVIDER_NAME,
+        query_text=query_text,
         portal=portal,
         source=PROVIDER_NAME,
         title=str(raw_job.get("job_title") or ""),
@@ -193,6 +194,7 @@ class JSearchClient:
                     "provider": PROVIDER_NAME,
                     "title": job.title,
                     "company": job.company,
+                    "query_text": job.query_text,
                     "portal": job.portal,
                     "source": job.source,
                     "city": job.city,
@@ -295,12 +297,13 @@ class JSearchClient:
         context: RunContext,
         *,
         remote_query: bool,
+        query_text: str,
     ) -> List[NormalizedJob]:
         normalized_page: List[NormalizedJob] = []
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
-            job = normalize_job(raw_item, context.started_at)
+            job = normalize_job(raw_item, context.started_at, query_text=query_text)
             if not title_matches(job, self.settings.search_titles):
                 self._log_filtered_out_job(
                     reason=f"{PROVIDER_NAME}_title_mismatch",
@@ -379,7 +382,12 @@ class JSearchClient:
             if not isinstance(result, list):
                 result = []
 
-            normalized_page = self._normalize_page_jobs(result, context, remote_query=remote_query)
+            normalized_page = self._normalize_page_jobs(
+                result,
+                context,
+                remote_query=remote_query,
+                query_text=str(params.get("query") or title),
+            )
             jobs.extend(normalized_page)
             has_more_pages = len(result) >= PAGE_SIZE
             LOGGER.info(

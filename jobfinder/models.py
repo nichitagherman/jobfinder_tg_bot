@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 class NormalizedJob:
     external_id: str
     collector: str
+    query_text: str
     portal: str
     source: str
     title: str

@@ -388,8 +388,9 @@ def make_raw_job(title: str, identifier: str) -> dict:
 
 class NormalizationTests(unittest.TestCase):
     def test_normalize_job_maps_payload(self):
-        job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc), query_text="project manager")
         self.assertEqual(job.collector, "jobdatafeeds")
+        self.assertEqual(job.query_text, "project manager")
         self.assertEqual(job.external_id, "abc123")
         self.assertEqual(job.canonical_url, "https://www.linkedin.com/jobs/view/abc123")
         self.assertEqual(job.company, "Microsoft")
@@ -494,8 +495,13 @@ class JSearchTests(unittest.TestCase):
         self.assertEqual(select_date_posted(context), "anytime")
 
     def test_normalize_jsearch_job_maps_payload(self):
-        job = normalize_jsearch_job(SAMPLE_JSEARCH_JOB, datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc))
+        job = normalize_jsearch_job(
+            SAMPLE_JSEARCH_JOB,
+            datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc),
+            query_text="project manager in Berlin",
+        )
         self.assertEqual(job.collector, "jsearch")
+        self.assertEqual(job.query_text, "project manager in Berlin")
         self.assertEqual(job.external_id, SAMPLE_JSEARCH_JOB["job_id"])
         self.assertEqual(job.portal, "linkedin")
         self.assertEqual(job.source, "jsearch")
@@ -514,7 +520,7 @@ class JSearchTests(unittest.TestCase):
             {"publisher": "Indeed", "apply_link": "https://example.com/non-direct", "is_direct": False},
             {"publisher": "XING", "apply_link": "https://example.com/direct", "is_direct": True},
         ]
-        job = normalize_jsearch_job(raw, datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc))
+        job = normalize_jsearch_job(raw, datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc), query_text="project manager in Berlin")
         self.assertEqual(job.canonical_url, "https://example.com/direct")
         self.assertTrue(job.is_direct)
 
@@ -571,6 +577,7 @@ class StorageTests(unittest.TestCase):
             jobs = storage.get_all_jobs()
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0].collector, "jobdatafeeds")
+            self.assertEqual(jobs[0].query_text, "")
             self.assertEqual(jobs[0].title, "Project Management Lead")
 
     def test_finalize_run_persists_incomplete_titles_and_query_count(self):
