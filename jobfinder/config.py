@@ -90,6 +90,7 @@ class Settings:
         common = {
             "format": "json",
             "title": title_query,
+            "industry": "-construction",
         }
         presets = [
             SearchPreset(

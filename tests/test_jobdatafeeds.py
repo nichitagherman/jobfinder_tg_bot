@@ -175,6 +175,7 @@ class QueryTests(unittest.TestCase):
             self.assertEqual(params["geoPointLat"], "52.5200")
             self.assertEqual(params["geoPointLng"], "13.4050")
             self.assertEqual(params["geoDistance"], "15mi")
+            self.assertEqual(params["industry"], "-construction")
             self.assertEqual(params["dateCreatedMin"], "2025-01-01")
             self.assertEqual(params["dateCreatedMax"], "2025-01-02")
             self.assertEqual(
