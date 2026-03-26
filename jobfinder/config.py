@@ -72,6 +72,7 @@ class Settings:
     notification_times: List[time]
     max_api_requests_per_run: int
     search_titles: List[str]
+    priority_companies: List[str]
     search_country_code: str
     allow_all_sources: bool
     cv_path: Optional[Path]
@@ -124,6 +125,14 @@ def load_filter_titles(path: Path) -> List[str]:
     if not titles:
         raise ValueError(f"Filter config 'job_titles' list must not be empty: {path}")
     return titles
+
+
+def load_priority_companies(path: Path) -> List[str]:
+    payload = load_filter_payload(path)
+    priority_companies = payload.get("priority_companies", [])
+    if not isinstance(priority_companies, list):
+        raise ValueError(f"Filter config 'priority_companies' must be a list when present: {path}")
+    return [str(item).strip() for item in priority_companies if str(item).strip()]
 
 
 def load_notification_times(path: Path) -> List[time]:
@@ -189,6 +198,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         notification_times=load_notification_times(resolved_filters_path),
         max_api_requests_per_run=_get_int("MAX_API_REQUESTS_PER_RUN", 2),
         search_titles=load_filter_titles(resolved_filters_path),
+        priority_companies=load_priority_companies(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
         allow_all_sources=_get_bool("ALLOW_ALL_SOURCES", True),
         cv_path=Path(cv_path) if cv_path else None,

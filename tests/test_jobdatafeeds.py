@@ -17,7 +17,7 @@ from jobfinder.jobdatafeeds_client import (
     remote_berlin_compatible,
     title_matches,
 )
-from jobfinder.runner import previous_scheduled_runtime
+from jobfinder.runner import _sort_jobs_for_output, previous_scheduled_runtime
 from jobfinder.storage import Storage
 from jobfinder.telegram_client import build_digest_messages
 
@@ -74,6 +74,20 @@ DEFAULT_FILTERS = """notification_times = [
   "18:00",
 ]
 
+priority_companies = [
+  "Zalando",
+  "Delivery Hero",
+  "HelloFresh",
+  "N26",
+  "AUTO1 Group",
+  "Trade Republic",
+  "GetYourGuide",
+  "Raisin",
+  "Omio",
+  "sennder",
+  "Contentful",
+]
+
 job_titles = [
   "project manager",
   "project management",
@@ -122,6 +136,7 @@ class ConfigTests(unittest.TestCase):
                 settings.notification_times,
                 [time(11, 0), time(14, 0), time(18, 0)],
             )
+            self.assertIn("Delivery Hero", settings.priority_companies)
 
     def test_build_presets_can_exclude_remote(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -576,6 +591,19 @@ class TelegramTests(unittest.TestCase):
         self.assertIn("<b>Role One</b>\n<i>Comp One</i>", messages[0])
         self.assertIn("<b>Role Two</b>\n<i>Comp Two</i>", messages[0])
         self.assertIn("Apply: https://example.com/1\n\n<b>Role Two</b>", messages[0])
+
+    def test_priority_companies_sort_first_but_keep_newest_within_group(self):
+        rows = [
+            {"company": "Other Co", "date_created": "2026-03-26T10:00:00+00:00", "fetched_at": "2026-03-26T10:00:00+00:00"},
+            {"company": "delivery hero", "date_created": "2026-03-25T10:00:00+00:00", "fetched_at": "2026-03-25T10:00:00+00:00"},
+            {"company": "Zalando", "date_created": "2026-03-26T09:00:00+00:00", "fetched_at": "2026-03-26T09:00:00+00:00"},
+            {"company": "AUTO1", "date_created": "2026-03-26T11:00:00+00:00", "fetched_at": "2026-03-26T11:00:00+00:00"},
+        ]
+        sorted_rows = _sort_jobs_for_output(rows, ["Zalando", "Delivery Hero", "AUTO1 Group"])
+        self.assertEqual(
+            [row["company"] for row in sorted_rows],
+            ["Zalando", "delivery hero", "AUTO1", "Other Co"],
+        )
 
 
 if __name__ == "__main__":

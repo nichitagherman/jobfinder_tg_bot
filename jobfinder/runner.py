@@ -31,6 +31,12 @@ def previous_scheduled_runtime(now_local: datetime, notification_times) -> datet
     return datetime.combine(previous_day, notification_times[-1], now_local.tzinfo)
 
 
+def _sort_jobs_for_output(rows, priority_companies):
+    priority_companies = {company.strip().lower() for company in priority_companies}
+    rows = sorted(rows, key=lambda row: row["date_created"] or row["fetched_at"] or "", reverse=True)
+    return sorted(rows, key=lambda row: 0 if (row["company"] or "").strip().lower() in priority_companies else 1)
+
+
 def run_daily(
     env_path: str = ".env",
     *,
@@ -83,7 +89,10 @@ def run_daily(
         all_jobs = mark_canonical_jobs(storage.get_all_jobs())
         canonical_urls = [job.canonical_url for job in all_jobs if job.is_canonical]
         storage.update_canonical_flags(canonical_urls)
-        unsent_rows = storage.get_unsent_canonical_jobs()
+        unsent_rows = _sort_jobs_for_output(
+            storage.get_unsent_canonical_jobs(),
+            settings.priority_companies,
+        )
         messages = build_digest_messages(
             unsent_rows,
             truncated=fetch_summary.was_truncated_by_request_cap,

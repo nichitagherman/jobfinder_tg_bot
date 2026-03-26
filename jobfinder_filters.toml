@@ -2,6 +2,20 @@ notification_times = [
   "12:00"
 ]
 
+priority_companies = [
+  "Zalando",
+  "Delivery Hero",
+  "HelloFresh",
+  "N26",
+  "AUTO1 Group",
+  "Trade Republic",
+  "GetYourGuide",
+  "Raisin",
+  "Omio",
+  "sennder",
+  "Contentful"
+]
+
 job_titles = [
   "business",
   "operations",
