@@ -12,6 +12,7 @@ from jobfinder.dedupe import choose_canonical, mark_canonical_jobs
 from jobfinder.jobdatafeeds_client import (
     JobDataFeedsClient,
     build_query_params,
+    excluded_by_seniority_title,
     normalize_job,
     remote_berlin_compatible,
     title_matches,
@@ -341,6 +342,31 @@ class NormalizationTests(unittest.TestCase):
         strategist_job_raw["jsonLD"]["title"] = "Strategist"
         strategist_job = normalize_job(strategist_job_raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
         self.assertFalse(title_matches(strategist_job, ["strategy"]))
+
+    def test_excluded_by_seniority_title_matches_conservative_markers(self):
+        senior_job_raw = dict(SAMPLE_JOB)
+        senior_job_raw["title"] = "Head of Strategy"
+        senior_job_raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        senior_job_raw["jsonLD"]["title"] = "Head of Strategy"
+        senior_job = normalize_job(senior_job_raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertIn("head", excluded_by_seniority_title(senior_job))
+
+        team_lead_raw = dict(SAMPLE_JOB)
+        team_lead_raw["title"] = "Team Lead - Client Operations Specialist"
+        team_lead_raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        team_lead_raw["jsonLD"]["title"] = "Team Lead - Client Operations Specialist"
+        team_lead_job = normalize_job(team_lead_raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        markers = excluded_by_seniority_title(team_lead_job)
+        self.assertIn("team lead", markers)
+        self.assertIn("lead", markers)
+
+    def test_excluded_by_seniority_title_allows_mid_titles(self):
+        raw = dict(SAMPLE_JOB)
+        raw["title"] = "Business Analyst Web and Mobile Banking"
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["title"] = "Business Analyst Web and Mobile Banking"
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertEqual(excluded_by_seniority_title(job), [])
 
 
 class DedupeTests(unittest.TestCase):

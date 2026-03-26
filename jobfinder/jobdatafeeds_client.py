@@ -21,6 +21,19 @@ LOGGER = logging.getLogger(__name__)
 FILTERED_OUT_LOGGER = logging.getLogger(FILTERED_OUT_LOGGER_NAME)
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
+_SENIORITY_EXCLUDED_PHRASES = (
+    "team lead",
+    "vice president",
+)
+_SENIORITY_EXCLUDED_TOKENS = {
+    "head",
+    "lead",
+    "director",
+    "vp",
+    "senior",
+    "principal",
+    "chief",
+}
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
@@ -200,6 +213,19 @@ def title_matches(job: NormalizedJob, search_titles: Iterable[str]) -> bool:
     return any(normalize_text(term) in haystack for term in search_titles)
 
 
+def excluded_by_seniority_title(job: NormalizedJob) -> List[str]:
+    normalized_title = normalize_text(job.title)
+    matched: List[str] = []
+    for phrase in _SENIORITY_EXCLUDED_PHRASES:
+        if phrase in normalized_title:
+            matched.append(phrase)
+    tokens = set(normalized_title.split())
+    for token in sorted(_SENIORITY_EXCLUDED_TOKENS):
+        if token in tokens:
+            matched.append(token)
+    return matched
+
+
 class JobDataFeedsClient:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -227,6 +253,7 @@ class JobDataFeedsClient:
         job: NormalizedJob,
         context: RunContext,
         remote_only: bool,
+        details: Optional[Dict[str, object]] = None,
     ) -> None:
         FILTERED_OUT_LOGGER.info(
             json.dumps(
@@ -244,6 +271,7 @@ class JobDataFeedsClient:
                     "remote_only": remote_only,
                     "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
                     "upper_bound": context.upper_bound.isoformat(),
+                    "details": details or {},
                     "raw_job": job.raw_json,
                 },
                 ensure_ascii=True,
@@ -327,6 +355,16 @@ class JobDataFeedsClient:
                     job=job,
                     context=context,
                     remote_only=remote_only,
+                )
+                continue
+            seniority_markers = excluded_by_seniority_title(job)
+            if seniority_markers:
+                self._log_filtered_out_job(
+                    reason="seniority_title_excluded",
+                    job=job,
+                    context=context,
+                    remote_only=remote_only,
+                    details={"matched_markers": seniority_markers},
                 )
                 continue
             if remote_only:
