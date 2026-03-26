@@ -23,6 +23,13 @@ def _prefix_incomplete_titles(provider: str, titles: list[str]) -> list[str]:
     return [f"{provider}: {title}" for title in titles]
 
 
+def _build_clients(settings):
+    clients = [("jobdatafeeds", JobDataFeedsClient(settings))]
+    if settings.jsearch_enabled and settings.jsearch_api_key:
+        clients.append(("jsearch", JSearchClient(settings)))
+    return clients
+
+
 def previous_scheduled_runtime(now_local: datetime, notification_times) -> datetime:
     today = now_local.date()
     prior_today = [
@@ -40,6 +47,49 @@ def _sort_jobs_for_output(rows, priority_companies):
     priority_companies = {company.strip().lower() for company in priority_companies}
     rows = sorted(rows, key=lambda row: row["date_created"] or row["fetched_at"] or "", reverse=True)
     return sorted(rows, key=lambda row: 0 if (row["company"] or "").strip().lower() in priority_companies else 1)
+
+
+def _resolve_lower_bound(storage: Storage, now_local: datetime, notification_times) -> datetime:
+    lower_bound = storage.get_last_checkpoint()
+    if lower_bound is not None:
+        LOGGER.info("Loaded checkpoint lower bound: %s", lower_bound.isoformat())
+        return lower_bound
+
+    lower_bound = previous_scheduled_runtime(now_local, notification_times).astimezone(timezone.utc)
+    LOGGER.info("No checkpoint found; using previous scheduled runtime as lower bound: %s", lower_bound.isoformat())
+    return lower_bound
+
+
+def _aggregate_fetch_summaries(clients, context: RunContext, *, include_remote: bool) -> FetchSummary:
+    jobs = []
+    api_requests_made = 0
+    jobs_fetched = 0
+    was_truncated = False
+    incomplete_titles: list[str] = []
+
+    for provider_name, client in clients:
+        provider_summary = client.fetch_jobs(context, include_remote=include_remote)
+        LOGGER.info(
+            "Provider fetch summary: provider=%s jobs=%s api_requests=%s truncated=%s incomplete_titles=%s",
+            provider_name,
+            provider_summary.jobs_fetched,
+            provider_summary.api_requests_made,
+            provider_summary.was_truncated_by_request_cap,
+            provider_summary.incomplete_titles,
+        )
+        jobs.extend(provider_summary.jobs)
+        api_requests_made += provider_summary.api_requests_made
+        jobs_fetched += provider_summary.jobs_fetched
+        was_truncated = was_truncated or provider_summary.was_truncated_by_request_cap
+        incomplete_titles.extend(_prefix_incomplete_titles(provider_name, provider_summary.incomplete_titles))
+
+    return FetchSummary(
+        jobs=jobs,
+        api_requests_made=api_requests_made,
+        jobs_fetched=jobs_fetched,
+        was_truncated_by_request_cap=was_truncated,
+        incomplete_titles=incomplete_titles,
+    )
 
 
 def run_daily(
@@ -65,50 +115,15 @@ def run_daily(
     )
 
     storage = Storage(settings.db_path)
-    clients = [("jobdatafeeds", JobDataFeedsClient(settings))]
-    if settings.jsearch_enabled and settings.jsearch_api_key:
-        clients.append(("jsearch", JSearchClient(settings)))
+    clients = _build_clients(settings)
     telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_ids)
 
-    lower_bound = storage.get_last_checkpoint()
-    if lower_bound is None:
-        lower_bound = previous_scheduled_runtime(now_local, settings.notification_times).astimezone(
-            timezone.utc
-        )
-        LOGGER.info("No checkpoint found; using previous scheduled runtime as lower bound: %s", lower_bound.isoformat())
-    else:
-        LOGGER.info("Loaded checkpoint lower bound: %s", lower_bound.isoformat())
+    lower_bound = _resolve_lower_bound(storage, now_local, settings.notification_times)
     context = RunContext(started_at=upper_bound, upper_bound=upper_bound, lower_bound=lower_bound)
     run_id = storage.create_run(upper_bound)
 
     try:
-        fetch_jobs = []
-        api_requests_made = 0
-        jobs_fetched = 0
-        was_truncated = False
-        incomplete_titles: list[str] = []
-        for provider_name, client in clients:
-            provider_summary = client.fetch_jobs(context, include_remote=include_remote)
-            LOGGER.info(
-                "Provider fetch summary: provider=%s jobs=%s api_requests=%s truncated=%s incomplete_titles=%s",
-                provider_name,
-                provider_summary.jobs_fetched,
-                provider_summary.api_requests_made,
-                provider_summary.was_truncated_by_request_cap,
-                provider_summary.incomplete_titles,
-            )
-            fetch_jobs.extend(provider_summary.jobs)
-            api_requests_made += provider_summary.api_requests_made
-            jobs_fetched += provider_summary.jobs_fetched
-            was_truncated = was_truncated or provider_summary.was_truncated_by_request_cap
-            incomplete_titles.extend(_prefix_incomplete_titles(provider_name, provider_summary.incomplete_titles))
-        fetch_summary = FetchSummary(
-            jobs=fetch_jobs,
-            api_requests_made=api_requests_made,
-            jobs_fetched=jobs_fetched,
-            was_truncated_by_request_cap=was_truncated,
-            incomplete_titles=incomplete_titles,
-        )
+        fetch_summary = _aggregate_fetch_summaries(clients, context, include_remote=include_remote)
         LOGGER.info(
             "Fetch summary: jobs=%s api_requests=%s truncated=%s incomplete_titles=%s",
             fetch_summary.jobs_fetched,

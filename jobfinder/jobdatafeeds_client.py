@@ -22,6 +22,7 @@ FILTERED_OUT_LOGGER = logging.getLogger(FILTERED_OUT_LOGGER_NAME)
 PROVIDER_NAME = "jobdatafeeds"
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
+DEFAULT_PAGE_SIZE = 10
 _SENIORITY_EXCLUDED_PHRASES = (
     "team lead",
     "vice president",
@@ -87,6 +88,10 @@ def _normalize_canonical_url(url: str) -> str:
     return urlunsplit((parts.scheme, "linkedin.com", parts.path, parts.query, parts.fragment))
 
 
+def _job_description(raw_job: Dict[str, object], json_ld: Dict[str, object]) -> str:
+    return str(_get_nested(json_ld, "description") or raw_job.get("description") or "")
+
+
 def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_text: str = "") -> NormalizedJob:
     json_ld = raw_job.get("jsonLD") if isinstance(raw_job.get("jsonLD"), dict) else {}
     canonical_url = _normalize_canonical_url(
@@ -113,10 +118,11 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
         timezone_offset = int(timezone_offset)
 
     work_place = _ensure_list(raw_job.get("workPlace"))
+    description = _job_description(raw_job, json_ld)
     fingerprint = build_duplicate_fingerprint(
         title=str(raw_job.get("title") or _get_nested(json_ld, "title") or ""),
         company=company,
-        description=str(_get_nested(json_ld, "description") or raw_job.get("description") or ""),
+        description=description,
     )
 
     return NormalizedJob(
@@ -145,7 +151,7 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
         date_active=str(raw_job.get("dateActive") or ""),
         date_expired=str(raw_job.get("dateExpired") or _get_nested(json_ld, "validThrough") or ""),
         canonical_url=canonical_url,
-        description=str(_get_nested(json_ld, "description") or raw_job.get("description") or ""),
+        description=description,
         duplicate_fingerprint=fingerprint,
         is_canonical=False,
         fetched_at=fetched_at.isoformat(),
@@ -254,38 +260,90 @@ class JobDataFeedsClient:
         context: RunContext,
         remote_only: bool,
         details: Optional[Dict[str, object]] = None,
-    ) -> None:
-        FILTERED_OUT_LOGGER.info(
-            json.dumps(
-                {
-                    "reason": reason,
-                    "provider": PROVIDER_NAME,
-                    "title": job.title,
-                    "company": job.company,
-                    "query_text": job.query_text,
-                    "portal": job.portal,
-                    "source": job.source,
-                    "city": job.city,
-                    "state": job.state,
-                    "country_code": job.country_code,
-                    "date_created": job.date_created,
-                    "canonical_url": job.canonical_url,
-                    "remote_only": remote_only,
-                    "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
-                    "upper_bound": context.upper_bound.isoformat(),
-                    "details": details or {},
-                    "raw_job": job.raw_json,
-                },
-                ensure_ascii=True,
-            )
-        )
+        ) -> None:
+        payload = {
+            "reason": reason,
+            "provider": PROVIDER_NAME,
+            "title": job.title,
+            "company": job.company,
+            "query_text": job.query_text,
+            "portal": job.portal,
+            "source": job.source,
+            "city": job.city,
+            "state": job.state,
+            "country_code": job.country_code,
+            "date_created": job.date_created,
+            "canonical_url": job.canonical_url,
+            "remote_only": remote_only,
+            "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
+            "upper_bound": context.upper_bound.isoformat(),
+            "details": details or {},
+            "raw_job": job.raw_json,
+        }
+        FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
 
-    def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
-        self._apply_request_cooldown()
-        query = urlencode(params)
+    def _request_headers(self) -> Dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "x-rapidapi-host": self.settings.jobdatafeeds_api_host,
+            "x-rapidapi-key": self.settings.jobdatafeeds_api_key,
+        }
+
+    def _request_url(self, params: Dict[str, str]) -> str:
+        return f"{self.settings.rapidapi_base_url}?{urlencode(params)}"
+
+    def _perform_request_once(self, params: Dict[str, str]) -> Dict[str, object]:
+        request = Request(
+            self._request_url(params),
+            headers=self._request_headers(),
+            method="GET",
+        )
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _execute_request_with_retry(self, params: Dict[str, str]) -> Dict[str, object]:
+        attempt = 1
+        while True:
+            self._mark_request_attempt()
+            try:
+                return self._perform_request_once(params)
+            except HTTPError as exc:
+                if exc.code == 429 and attempt == 1:
+                    LOGGER.warning(
+                        "JobDataFeeds rate limited the request: page=%s title=%s cooldown_seconds=%.1f retry_attempt=%s",
+                        params.get("page"),
+                        params.get("title"),
+                        RATE_LIMIT_RETRY_SECONDS,
+                        attempt + 1,
+                    )
+                    self._sleep(RATE_LIMIT_RETRY_SECONDS)
+                    attempt += 1
+                    continue
+                raise
+
+    def _raw_results(self, payload: Dict[str, object]) -> List[object]:
+        result = payload.get("result", [])
+        return result if isinstance(result, list) else []
+
+    def _should_fetch_next_local_page(self, result: List[object], page_size: int) -> bool:
+        return bool(result) and page_size > 0 and len(result) >= page_size
+
+    def _build_filtered_out_reason(self, suffix: str) -> str:
+        return f"{PROVIDER_NAME}_{suffix}"
+
+    def _page_size(self, payload: Dict[str, object]) -> int:
+        return int(payload.get("pageSize", DEFAULT_PAGE_SIZE) or DEFAULT_PAGE_SIZE)
+
+    def _remaining_titles(self, queue: Deque[tuple[str, int]]) -> List[str]:
+        return sorted({title for title, _ in queue})
+
+    def _local_query_queue(self) -> Deque[tuple[str, int]]:
+        return deque((title, 1) for title in self.settings.search_titles)
+
+    def _log_request(self, params: Dict[str, str]) -> None:
         curl_like = (
             "curl --request GET "
-            f"--url '{self.settings.rapidapi_base_url}?{query}' "
+            f"--url '{self._request_url(params)}' "
             "--header 'Content-Type: application/json' "
             f"--header 'x-rapidapi-host: {self.settings.jobdatafeeds_api_host}' "
             "--header 'x-rapidapi-key: [REDACTED]'"
@@ -300,42 +358,91 @@ class JobDataFeedsClient:
             params.get("dateCreatedMax", ""),
         )
         LOGGER.info("JobDataFeeds cURL provider=%s: %s", PROVIDER_NAME, curl_like)
-        request = Request(
-            f"{self.settings.rapidapi_base_url}?{query}",
-            headers={
-                "Content-Type": "application/json",
-                "x-rapidapi-host": self.settings.jobdatafeeds_api_host,
-                "x-rapidapi-key": self.settings.jobdatafeeds_api_key,
-            },
-            method="GET",
-        )
-        attempt = 1
-        while True:
-            self._mark_request_attempt()
-            try:
-                with urlopen(request, timeout=30) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                break
-            except HTTPError as exc:
-                if exc.code == 429 and attempt == 1:
-                    LOGGER.warning(
-                        "JobDataFeeds rate limited the request: page=%s title=%s cooldown_seconds=%.1f retry_attempt=%s",
-                        params.get("page"),
-                        params.get("title"),
-                        RATE_LIMIT_RETRY_SECONDS,
-                        attempt + 1,
-                    )
-                    self._sleep(RATE_LIMIT_RETRY_SECONDS)
-                    attempt += 1
-                    continue
-                raise
+
+    def _log_response(self, params: Dict[str, str], payload: Dict[str, object]) -> None:
         LOGGER.info(
             "JobDataFeeds response received: page=%s totalCount=%s pageSize=%s raw_results=%s",
             params.get("page"),
             payload.get("totalCount"),
             payload.get("pageSize"),
-            len(payload.get("result", [])) if isinstance(payload.get("result"), list) else 0,
+            len(self._raw_results(payload)),
         )
+
+    def _rejected_job(
+        self,
+        *,
+        reason: str,
+        job: NormalizedJob,
+        context: RunContext,
+        remote_only: bool,
+        details: Optional[Dict[str, object]] = None,
+    ) -> bool:
+        self._log_filtered_out_job(
+            reason=reason,
+            job=job,
+            context=context,
+            remote_only=remote_only,
+            details=details,
+        )
+        return True
+
+    def _within_window(self, job: NormalizedJob, context: RunContext, *, remote_only: bool) -> bool:
+        posted_at = _parse_iso(job.date_created)
+        if context.lower_bound and posted_at and posted_at <= context.lower_bound:
+            self._rejected_job(
+                reason=self._build_filtered_out_reason("before_or_equal_lower_bound"),
+                job=job,
+                context=context,
+                remote_only=remote_only,
+            )
+            return False
+        if posted_at and posted_at > context.upper_bound:
+            self._rejected_job(
+                reason=self._build_filtered_out_reason("after_upper_bound"),
+                job=job,
+                context=context,
+                remote_only=remote_only,
+            )
+            return False
+        return True
+
+    def _passes_filters(self, job: NormalizedJob, context: RunContext, *, remote_only: bool) -> bool:
+        if not title_matches(job, self.settings.search_titles):
+            self._rejected_job(
+                reason=self._build_filtered_out_reason("title_mismatch"),
+                job=job,
+                context=context,
+                remote_only=remote_only,
+            )
+            return False
+
+        seniority_markers = excluded_by_seniority_title(job)
+        if seniority_markers:
+            self._rejected_job(
+                reason=self._build_filtered_out_reason("seniority_title_excluded"),
+                job=job,
+                context=context,
+                remote_only=remote_only,
+                details={"matched_markers": seniority_markers},
+            )
+            return False
+
+        if remote_only and not remote_berlin_compatible(job):
+            self._rejected_job(
+                reason=self._build_filtered_out_reason("remote_incompatible"),
+                job=job,
+                context=context,
+                remote_only=remote_only,
+            )
+            return False
+
+        return self._within_window(job, context, remote_only=remote_only)
+
+    def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
+        self._apply_request_cooldown()
+        self._log_request(params)
+        payload = self._execute_request_with_retry(params)
+        self._log_response(params, payload)
         return payload
 
     def _normalize_page_jobs(
@@ -352,50 +459,9 @@ class JobDataFeedsClient:
             if not isinstance(raw_item, dict):
                 continue
             job = normalize_job(raw_item, context.started_at, query_text=query_text)
-            if not title_matches(job, self.settings.search_titles):
-                rejected_wrong_title += 1
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_title_mismatch",
-                    job=job,
-                    context=context,
-                    remote_only=remote_only,
-                )
-                continue
-            seniority_markers = excluded_by_seniority_title(job)
-            if seniority_markers:
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_seniority_title_excluded",
-                    job=job,
-                    context=context,
-                    remote_only=remote_only,
-                    details={"matched_markers": seniority_markers},
-                )
-                continue
-            if remote_only:
-                if not remote_berlin_compatible(job):
-                    self._log_filtered_out_job(
-                        reason=f"{PROVIDER_NAME}_remote_incompatible",
-                        job=job,
-                        context=context,
-                        remote_only=remote_only,
-                    )
-                    continue
-            posted_at = _parse_iso(job.date_created)
-            if context.lower_bound and posted_at and posted_at <= context.lower_bound:
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_before_or_equal_lower_bound",
-                    job=job,
-                    context=context,
-                    remote_only=remote_only,
-                )
-                continue
-            if posted_at and posted_at > context.upper_bound:
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_after_upper_bound",
-                    job=job,
-                    context=context,
-                    remote_only=remote_only,
-                )
+            if not self._passes_filters(job, context, remote_only=remote_only):
+                if not title_matches(job, self.settings.search_titles):
+                    rejected_wrong_title += 1
                 continue
             normalized_page.append(job)
         LOGGER.info(
@@ -415,12 +481,12 @@ class JobDataFeedsClient:
         api_requests_made = 0
         truncated_by_request_cap = False
         incomplete_titles: set[str] = set()
-        queue: Deque[tuple[str, int]] = deque((title, 1) for title in self.settings.search_titles)
+        queue = self._local_query_queue()
 
         while queue:
             if api_requests_made >= self.settings.jobdatafeeds_max_api_requests_per_run:
                 truncated_by_request_cap = True
-                incomplete_titles.update(title for title, _ in queue)
+                incomplete_titles.update(self._remaining_titles(queue))
                 LOGGER.warning(
                     "Request cap reached for local fetch: cap=%s incomplete_titles=%s",
                     self.settings.jobdatafeeds_max_api_requests_per_run,
@@ -438,13 +504,10 @@ class JobDataFeedsClient:
             )
             payload = self._perform_request(params)
             api_requests_made += 1
-            result = payload.get("result", [])
-            if not isinstance(result, list):
-                result = []
+            result = self._raw_results(payload)
 
             normalized_page = self._normalize_page_jobs(result, context, remote_only=False, query_text=title)
-            page_size = int(payload.get("pageSize", 10) or 10)
-            has_more_pages = bool(result) and page_size > 0 and len(result) >= page_size
+            has_more_pages = self._should_fetch_next_local_page(result, self._page_size(payload))
             jobs.extend(normalized_page)
             LOGGER.info(
                 "Local title page processed: title=%s page=%s kept=%s raw=%s has_more_pages=%s queue_remaining=%s",
@@ -492,8 +555,8 @@ class JobDataFeedsClient:
             params = build_query_params(preset, page, context.lower_bound, context.upper_bound)
             payload = self._perform_request(params)
             api_requests_made += 1
-            result = payload.get("result", [])
-            if not isinstance(result, list) or not result:
+            result = self._raw_results(payload)
+            if not result:
                 LOGGER.info("Preset fetch ended: preset=%s page=%s raw_results=0", preset.name, page)
                 break
 
@@ -512,7 +575,7 @@ class JobDataFeedsClient:
                 len(result),
             )
             page += 1
-            page_size = int(payload.get("pageSize", 10) or 10)
+            page_size = self._page_size(payload)
             total_count = int(payload.get("totalCount", 0) or 0)
             if page_size * (page - 1) >= total_count:
                 LOGGER.info(

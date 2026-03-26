@@ -24,6 +24,7 @@ PROVIDER_NAME = "jsearch"
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
 PAGE_SIZE = 10
+DEFAULT_LANGUAGE = ""
 
 
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
@@ -43,6 +44,10 @@ def _ensure_list(value: object) -> List[str]:
         return []
     text = str(value).strip()
     return [text] if text else []
+
+
+def _job_description(raw_job: Dict[str, object]) -> str:
+    return str(raw_job.get("job_description") or "")
 
 
 def _normalize_portal(publisher: str, canonical_url: str) -> str:
@@ -102,11 +107,12 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
     state = str(raw_job.get("job_state") or "")
     country_code = str(raw_job.get("job_country") or "")
     work_type = [value.lower() for value in _ensure_list(raw_job.get("job_employment_types"))]
+    description = _job_description(raw_job)
 
     fingerprint = build_duplicate_fingerprint(
         title=str(raw_job.get("job_title") or ""),
         company=company,
-        description=str(raw_job.get("job_description") or ""),
+        description=description,
     )
 
     return NormalizedJob(
@@ -128,14 +134,14 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
         career_level=[],
         occupation="",
         industry="",
-        language="",
+        language=DEFAULT_LANGUAGE,
         is_direct=is_direct,
         is_recruiter=False,
         date_created=str(raw_job.get("job_posted_at_datetime_utc") or ""),
         date_active="",
         date_expired="",
         canonical_url=canonical_url,
-        description=str(raw_job.get("job_description") or ""),
+        description=description,
         duplicate_fingerprint=fingerprint,
         is_canonical=False,
         fetched_at=fetched_at.isoformat(),
@@ -187,67 +193,52 @@ class JSearchClient:
         remote_query: bool,
         details: Optional[Dict[str, object]] = None,
     ) -> None:
-        FILTERED_OUT_LOGGER.info(
-            json.dumps(
-                {
-                    "reason": reason,
-                    "provider": PROVIDER_NAME,
-                    "title": job.title,
-                    "company": job.company,
-                    "query_text": job.query_text,
-                    "portal": job.portal,
-                    "source": job.source,
-                    "city": job.city,
-                    "state": job.state,
-                    "country_code": job.country_code,
-                    "date_created": job.date_created,
-                    "canonical_url": job.canonical_url,
-                    "remote_query": remote_query,
-                    "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
-                    "upper_bound": context.upper_bound.isoformat(),
-                    "details": details or {},
-                    "raw_job": job.raw_json,
-                },
-                ensure_ascii=True,
-            )
-        )
+        payload = {
+            "reason": reason,
+            "provider": PROVIDER_NAME,
+            "title": job.title,
+            "company": job.company,
+            "query_text": job.query_text,
+            "portal": job.portal,
+            "source": job.source,
+            "city": job.city,
+            "state": job.state,
+            "country_code": job.country_code,
+            "date_created": job.date_created,
+            "canonical_url": job.canonical_url,
+            "remote_query": remote_query,
+            "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
+            "upper_bound": context.upper_bound.isoformat(),
+            "details": details or {},
+            "raw_job": job.raw_json,
+        }
+        FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
 
-    def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
-        self._apply_request_cooldown()
-        query = urlencode(params)
-        curl_like = (
-            "curl --request GET "
-            f"--url '{self.settings.jsearch_base_url}?{query}' "
-            "--header 'Content-Type: application/json' "
-            f"--header 'x-rapidapi-host: {self.settings.jsearch_api_host}' "
-            "--header 'x-rapidapi-key: [REDACTED]'"
-        )
-        LOGGER.info(
-            "Requesting JSearch: provider=%s page=%s query=%s work_from_home=%s date_posted=%s",
-            PROVIDER_NAME,
-            params.get("page"),
-            params.get("query"),
-            params.get("work_from_home", ""),
-            params.get("date_posted"),
-        )
-        LOGGER.info("JSearch cURL provider=%s: %s", PROVIDER_NAME, curl_like)
+    def _request_headers(self) -> Dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "x-rapidapi-host": self.settings.jsearch_api_host,
+            "x-rapidapi-key": self.settings.jsearch_api_key or "",
+        }
+
+    def _request_url(self, params: Dict[str, str]) -> str:
+        return f"{self.settings.jsearch_base_url}?{urlencode(params)}"
+
+    def _perform_request_once(self, params: Dict[str, str]) -> Dict[str, object]:
         request = Request(
-            f"{self.settings.jsearch_base_url}?{query}",
-            headers={
-                "Content-Type": "application/json",
-                "x-rapidapi-host": self.settings.jsearch_api_host,
-                "x-rapidapi-key": self.settings.jsearch_api_key or "",
-            },
+            self._request_url(params),
+            headers=self._request_headers(),
             method="GET",
         )
+        with urlopen(request, timeout=30) as response:
+            return json.loads(response.read().decode("utf-8"))
 
+    def _execute_request_with_retry(self, params: Dict[str, str]) -> Dict[str, object]:
         attempt = 1
         while True:
             self._mark_request_attempt()
             try:
-                with urlopen(request, timeout=30) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-                break
+                return self._perform_request_once(params)
             except HTTPError as exc:
                 if exc.code == 429 and attempt == 1:
                     LOGGER.warning(
@@ -263,13 +254,97 @@ class JSearchClient:
                     continue
                 raise
 
+    def _raw_results(self, payload: Dict[str, object]) -> List[object]:
+        result = payload.get("data", [])
+        return result if isinstance(result, list) else []
+
+    def _query_modes(self, include_remote: bool) -> List[bool]:
+        return [False, True] if include_remote else [False]
+
+    def _local_query_text(self, title: str) -> str:
+        return f"{title} in Berlin"
+
+    def _build_filtered_out_reason(self, suffix: str) -> str:
+        return f"{PROVIDER_NAME}_{suffix}"
+
+    def _remaining_titles(self, queue: Deque[tuple[str, int]]) -> List[str]:
+        return sorted({title for title, _ in queue})
+
+    def _query_queue(self) -> Deque[tuple[str, int]]:
+        return deque((title, 1) for title in self.settings.search_titles)
+
+    def _log_request(self, params: Dict[str, str]) -> None:
+        curl_like = (
+            "curl --request GET "
+            f"--url '{self._request_url(params)}' "
+            "--header 'Content-Type: application/json' "
+            f"--header 'x-rapidapi-host: {self.settings.jsearch_api_host}' "
+            "--header 'x-rapidapi-key: [REDACTED]'"
+        )
+        LOGGER.info(
+            "Requesting JSearch: provider=%s page=%s query=%s work_from_home=%s date_posted=%s",
+            PROVIDER_NAME,
+            params.get("page"),
+            params.get("query"),
+            params.get("work_from_home", ""),
+            params.get("date_posted"),
+        )
+        LOGGER.info("JSearch cURL provider=%s: %s", PROVIDER_NAME, curl_like)
+
+    def _log_response(self, params: Dict[str, str], payload: Dict[str, object]) -> None:
         LOGGER.info(
             "JSearch response received: provider=%s page=%s status=%s raw_results=%s",
             PROVIDER_NAME,
             params.get("page"),
             payload.get("status"),
-            len(payload.get("data", [])) if isinstance(payload.get("data"), list) else 0,
+            len(self._raw_results(payload)),
         )
+
+    def _passes_filters(self, job: NormalizedJob, context: RunContext, *, remote_query: bool) -> bool:
+        if not title_matches(job, self.settings.search_titles):
+            self._log_filtered_out_job(
+                reason=self._build_filtered_out_reason("title_mismatch"),
+                job=job,
+                context=context,
+                remote_query=remote_query,
+            )
+            return False
+
+        seniority_markers = excluded_by_seniority_title(job)
+        if seniority_markers:
+            self._log_filtered_out_job(
+                reason=self._build_filtered_out_reason("seniority_title_excluded"),
+                job=job,
+                context=context,
+                remote_query=remote_query,
+                details={"matched_markers": seniority_markers},
+            )
+            return False
+
+        posted_at = _parse_iso(job.date_created)
+        if context.lower_bound and posted_at and posted_at <= context.lower_bound:
+            self._log_filtered_out_job(
+                reason=self._build_filtered_out_reason("before_or_equal_lower_bound"),
+                job=job,
+                context=context,
+                remote_query=remote_query,
+            )
+            return False
+        if posted_at and posted_at > context.upper_bound:
+            self._log_filtered_out_job(
+                reason=self._build_filtered_out_reason("after_upper_bound"),
+                job=job,
+                context=context,
+                remote_query=remote_query,
+            )
+            return False
+        return True
+
+    def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
+        self._apply_request_cooldown()
+        self._log_request(params)
+        payload = self._execute_request_with_retry(params)
+        self._log_response(params, payload)
         return payload
 
     def _build_query_params(
@@ -281,7 +356,7 @@ class JSearchClient:
         remote_query: bool,
     ) -> Dict[str, str]:
         params = {
-            "query": title if remote_query else f"{title} in Berlin",
+            "query": title if remote_query else self._local_query_text(title),
             "page": str(page),
             "num_pages": "1",
             "country": self.settings.search_country_code,
@@ -304,40 +379,7 @@ class JSearchClient:
             if not isinstance(raw_item, dict):
                 continue
             job = normalize_job(raw_item, context.started_at, query_text=query_text)
-            if not title_matches(job, self.settings.search_titles):
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_title_mismatch",
-                    job=job,
-                    context=context,
-                    remote_query=remote_query,
-                )
-                continue
-            seniority_markers = excluded_by_seniority_title(job)
-            if seniority_markers:
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_seniority_title_excluded",
-                    job=job,
-                    context=context,
-                    remote_query=remote_query,
-                    details={"matched_markers": seniority_markers},
-                )
-                continue
-            posted_at = _parse_iso(job.date_created)
-            if context.lower_bound and posted_at and posted_at <= context.lower_bound:
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_before_or_equal_lower_bound",
-                    job=job,
-                    context=context,
-                    remote_query=remote_query,
-                )
-                continue
-            if posted_at and posted_at > context.upper_bound:
-                self._log_filtered_out_job(
-                    reason=f"{PROVIDER_NAME}_after_upper_bound",
-                    job=job,
-                    context=context,
-                    remote_query=remote_query,
-                )
+            if not self._passes_filters(job, context, remote_query=remote_query):
                 continue
             normalized_page.append(job)
         LOGGER.info(
@@ -359,12 +401,12 @@ class JSearchClient:
         api_requests_made = starting_api_requests
         truncated_by_request_cap = False
         incomplete_titles: set[str] = set()
-        queue: Deque[tuple[str, int]] = deque((title, 1) for title in self.settings.search_titles)
+        queue = self._query_queue()
 
         while queue:
             if api_requests_made >= self.settings.jsearch_max_api_requests_per_run:
                 truncated_by_request_cap = True
-                incomplete_titles.update(title for title, _ in queue)
+                incomplete_titles.update(self._remaining_titles(queue))
                 LOGGER.warning(
                     "Request cap reached for JSearch fetch: provider=%s remote_query=%s cap=%s incomplete_titles=%s",
                     PROVIDER_NAME,
@@ -378,9 +420,7 @@ class JSearchClient:
             params = self._build_query_params(title=title, page=page, context=context, remote_query=remote_query)
             payload = self._perform_request(params)
             api_requests_made += 1
-            result = payload.get("data", [])
-            if not isinstance(result, list):
-                result = []
+            result = self._raw_results(payload)
 
             normalized_page = self._normalize_page_jobs(
                 result,
@@ -428,7 +468,7 @@ class JSearchClient:
             context.upper_bound.isoformat(),
         )
 
-        for remote_query in [False, True] if include_remote else [False]:
+        for remote_query in self._query_modes(include_remote):
             summary = self._fetch_mode_jobs(
                 context,
                 remote_query=remote_query,

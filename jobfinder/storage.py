@@ -73,6 +73,43 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 INSERT OR IGNORE INTO checkpoints (id, last_successful_upper_bound) VALUES (1, NULL);
 """
 
+UPSERT_JOBS_SQL = """
+INSERT INTO jobs (
+    external_id, collector, query_text, portal, source, title, company, country_code, state, city,
+    timezone, timezone_offset, work_place_json, work_type_json, contract_type_json,
+    career_level_json, occupation, industry, language, is_direct, is_recruiter,
+    date_created, date_active, date_expired, canonical_url, description,
+    duplicate_fingerprint, is_canonical, sent_at, fetched_at, raw_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT(portal, source, external_id) DO UPDATE SET
+    collector = excluded.collector,
+    query_text = excluded.query_text,
+    title = excluded.title,
+    company = excluded.company,
+    country_code = excluded.country_code,
+    state = excluded.state,
+    city = excluded.city,
+    timezone = excluded.timezone,
+    timezone_offset = excluded.timezone_offset,
+    work_place_json = excluded.work_place_json,
+    work_type_json = excluded.work_type_json,
+    contract_type_json = excluded.contract_type_json,
+    career_level_json = excluded.career_level_json,
+    occupation = excluded.occupation,
+    industry = excluded.industry,
+    language = excluded.language,
+    is_direct = excluded.is_direct,
+    is_recruiter = excluded.is_recruiter,
+    date_created = excluded.date_created,
+    date_active = excluded.date_active,
+    date_expired = excluded.date_expired,
+    canonical_url = excluded.canonical_url,
+    description = excluded.description,
+    duplicate_fingerprint = excluded.duplicate_fingerprint,
+    fetched_at = excluded.fetched_at,
+    raw_json = excluded.raw_json
+"""
+
 
 class Storage:
     def __init__(self, db_path: Path):
@@ -84,21 +121,21 @@ class Storage:
     def _init_db(self) -> None:
         with self.connect() as conn:
             conn.executescript(SCHEMA)
-            run_columns = {row["name"] for row in conn.execute("PRAGMA table_info(runs)").fetchall()}
-            job_columns = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+            run_columns = self._table_columns(conn, "runs")
+            job_columns = self._table_columns(conn, "jobs")
             if "collector" not in job_columns:
-                conn.execute(
-                    "ALTER TABLE jobs ADD COLUMN collector TEXT NOT NULL DEFAULT 'jobdatafeeds'"
-                )
+                conn.execute("ALTER TABLE jobs ADD COLUMN collector TEXT NOT NULL DEFAULT 'jobdatafeeds'")
                 conn.execute("UPDATE jobs SET collector = 'jobdatafeeds' WHERE collector = '' OR collector IS NULL")
             if "query_text" not in job_columns:
-                conn.execute(
-                    "ALTER TABLE jobs ADD COLUMN query_text TEXT NOT NULL DEFAULT ''"
-                )
+                conn.execute("ALTER TABLE jobs ADD COLUMN query_text TEXT NOT NULL DEFAULT ''")
             if "incomplete_titles_json" not in run_columns:
                 conn.execute(
                     "ALTER TABLE runs ADD COLUMN incomplete_titles_json TEXT NOT NULL DEFAULT '[]'"
                 )
+
+    @staticmethod
+    def _table_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
+        return {row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()}
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
@@ -196,77 +233,7 @@ class Storage:
         inserted = 0
         with self.connect() as conn:
             for job in jobs:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO jobs (
-                        external_id, collector, query_text, portal, source, title, company, country_code, state, city,
-                        timezone, timezone_offset, work_place_json, work_type_json, contract_type_json,
-                        career_level_json, occupation, industry, language, is_direct, is_recruiter,
-                        date_created, date_active, date_expired, canonical_url, description,
-                        duplicate_fingerprint, is_canonical, sent_at, fetched_at, raw_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(portal, source, external_id) DO UPDATE SET
-                        collector = excluded.collector,
-                        query_text = excluded.query_text,
-                        title = excluded.title,
-                        company = excluded.company,
-                        country_code = excluded.country_code,
-                        state = excluded.state,
-                        city = excluded.city,
-                        timezone = excluded.timezone,
-                        timezone_offset = excluded.timezone_offset,
-                        work_place_json = excluded.work_place_json,
-                        work_type_json = excluded.work_type_json,
-                        contract_type_json = excluded.contract_type_json,
-                        career_level_json = excluded.career_level_json,
-                        occupation = excluded.occupation,
-                        industry = excluded.industry,
-                        language = excluded.language,
-                        is_direct = excluded.is_direct,
-                        is_recruiter = excluded.is_recruiter,
-                        date_created = excluded.date_created,
-                        date_active = excluded.date_active,
-                        date_expired = excluded.date_expired,
-                        canonical_url = excluded.canonical_url,
-                        description = excluded.description,
-                        duplicate_fingerprint = excluded.duplicate_fingerprint,
-                        fetched_at = excluded.fetched_at,
-                        raw_json = excluded.raw_json
-                    """,
-                    (
-                        job.external_id,
-                        job.collector,
-                        job.query_text,
-                        job.portal,
-                        job.source,
-                        job.title,
-                        job.company,
-                        job.country_code,
-                        job.state,
-                        job.city,
-                        job.timezone,
-                        job.timezone_offset,
-                        json.dumps(job.work_place),
-                        json.dumps(job.work_type),
-                        json.dumps(job.contract_type),
-                        json.dumps(job.career_level),
-                        job.occupation,
-                        job.industry,
-                        job.language,
-                        int(job.is_direct),
-                        int(job.is_recruiter),
-                        job.date_created,
-                        job.date_active,
-                        job.date_expired,
-                        job.canonical_url,
-                        job.description,
-                        job.duplicate_fingerprint,
-                        int(job.is_canonical),
-                        None,
-                        job.fetched_at,
-                        json.dumps(job.raw_json),
-                    ),
-                )
+                cursor = conn.execute(UPSERT_JOBS_SQL, self._job_to_row(job))
                 inserted += cursor.rowcount if cursor.rowcount > 0 else 0
         LOGGER.info("Jobs upserted: batch_size=%s sqlite_rowcount_sum=%s", len(jobs), inserted)
         return inserted
@@ -314,6 +281,42 @@ class Storage:
                 [(sent_at.isoformat(), url) for url in urls],
             )
         LOGGER.info("Jobs marked as sent: count=%s sent_at=%s", len(urls), sent_at.isoformat())
+
+    @staticmethod
+    def _job_to_row(job: NormalizedJob) -> tuple:
+        return (
+            job.external_id,
+            job.collector,
+            job.query_text,
+            job.portal,
+            job.source,
+            job.title,
+            job.company,
+            job.country_code,
+            job.state,
+            job.city,
+            job.timezone,
+            job.timezone_offset,
+            json.dumps(job.work_place),
+            json.dumps(job.work_type),
+            json.dumps(job.contract_type),
+            json.dumps(job.career_level),
+            job.occupation,
+            job.industry,
+            job.language,
+            int(job.is_direct),
+            int(job.is_recruiter),
+            job.date_created,
+            job.date_active,
+            job.date_expired,
+            job.canonical_url,
+            job.description,
+            job.duplicate_fingerprint,
+            int(job.is_canonical),
+            None,
+            job.fetched_at,
+            json.dumps(job.raw_json),
+        )
 
     @staticmethod
     def _row_to_job(row: sqlite3.Row) -> NormalizedJob:

@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 
 _TITLE_TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
+_TRUE_VALUES = {"1", "true", "yes", "on"}
+_DEFAULT_JOBDATAFEEDS_HOST = "daily-international-job-postings.p.rapidapi.com"
+_DEFAULT_JSEARCH_HOST = "jsearch.p.rapidapi.com"
+_DEFAULT_DB_PATH = "runtime/jobfinder.sqlite3"
 
 
 def load_dotenv(path: Path) -> None:
@@ -29,7 +33,7 @@ def _get_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:
         return default
-    return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return raw.strip().lower() in _TRUE_VALUES
 
 
 def _get_int(name: str, default: int) -> int:
@@ -59,6 +63,45 @@ def build_api_title_query(title: str) -> str:
     if not tokens:
         return title.strip()
     return ",".join(f"+{token}" for token in tokens)
+
+
+def _resolve_filters_path(env_file: Path, filters_path: Optional[str]) -> Path:
+    return Path(filters_path) if filters_path else env_file.parent / "jobfinder_filters.toml"
+
+
+def _load_telegram_chat_ids() -> List[str]:
+    chat_ids = _get_list("TELEGRAM_CHAT_IDS")
+    if chat_ids:
+        return chat_ids
+    legacy_chat_id = _get_optional("TELEGRAM_CHAT_ID")
+    return [legacy_chat_id] if legacy_chat_id else []
+
+
+def _validate_required_settings(telegram_chat_ids: List[str]) -> None:
+    missing = [
+        name
+        for name in ("JOBDATAFEEDS_API_TOKEN", "TELEGRAM_BOT_TOKEN")
+        if not _get_optional(name)
+    ]
+    if not telegram_chat_ids:
+        missing.append("TELEGRAM_CHAT_ID or TELEGRAM_CHAT_IDS")
+    if missing:
+        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
+
+
+def _resolve_paths() -> Dict[str, Path | None]:
+    db_path = Path(os.getenv("DB_PATH", _DEFAULT_DB_PATH))
+    cv_path = _get_optional("CV_PATH")
+    cover_letter_path = _get_optional("COVER_LETTER_PATH")
+    return {
+        "db_path": db_path,
+        "cv_path": Path(cv_path) if cv_path else None,
+        "cover_letter_path": Path(cover_letter_path) if cover_letter_path else None,
+        "log_path": Path(os.getenv("LOG_PATH", str(db_path.parent / "jobfinder.log"))),
+        "filtered_out_jobs_log_path": Path(
+            os.getenv("FILTERED_OUT_JOBS_LOG_PATH", str(db_path.parent / "filtered_out_jobs.jsonl"))
+        ),
+    }
 
 
 @dataclass(frozen=True)
@@ -183,43 +226,20 @@ def load_filter_payload(path: Path) -> Dict[str, Any]:
 def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) -> Settings:
     env_file = Path(env_path)
     load_dotenv(env_file)
-    resolved_filters_path = Path(filters_path) if filters_path else env_file.parent / "jobfinder_filters.toml"
-
-    telegram_chat_ids = _get_list("TELEGRAM_CHAT_IDS")
-    if not telegram_chat_ids:
-        legacy_chat_id = _get_optional("TELEGRAM_CHAT_ID")
-        if legacy_chat_id:
-            telegram_chat_ids = [legacy_chat_id]
-
-    missing = [
-        name
-        for name in ("JOBDATAFEEDS_API_TOKEN", "TELEGRAM_BOT_TOKEN")
-        if not _get_optional(name)
-    ]
-    if not telegram_chat_ids:
-        missing.append("TELEGRAM_CHAT_ID or TELEGRAM_CHAT_IDS")
-    if missing:
-        raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
-
-    db_path = Path(os.getenv("DB_PATH", "runtime/jobfinder.sqlite3"))
-    cv_path = _get_optional("CV_PATH")
-    cover_letter_path = _get_optional("COVER_LETTER_PATH")
-    log_path = Path(os.getenv("LOG_PATH", str(db_path.parent / "jobfinder.log")))
-    filtered_out_jobs_log_path = Path(
-        os.getenv("FILTERED_OUT_JOBS_LOG_PATH", str(db_path.parent / "filtered_out_jobs.jsonl"))
-    )
+    resolved_filters_path = _resolve_filters_path(env_file, filters_path)
+    telegram_chat_ids = _load_telegram_chat_ids()
+    _validate_required_settings(telegram_chat_ids)
+    paths = _resolve_paths()
 
     return Settings(
         jobdatafeeds_api_key=os.environ["JOBDATAFEEDS_API_TOKEN"],
-        jobdatafeeds_api_host=os.getenv(
-            "JOBDATAFEEDS_API_HOST", "daily-international-job-postings.p.rapidapi.com"
-        ),
+        jobdatafeeds_api_host=os.getenv("JOBDATAFEEDS_API_HOST", _DEFAULT_JOBDATAFEEDS_HOST),
         jsearch_enabled=_get_bool("ENABLE_JSEARCH", False),
         jsearch_api_key=_get_optional("JSEARCH_API_KEY"),
-        jsearch_api_host=os.getenv("JSEARCH_API_HOST", "jsearch.p.rapidapi.com"),
+        jsearch_api_host=os.getenv("JSEARCH_API_HOST", _DEFAULT_JSEARCH_HOST),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
         telegram_chat_ids=telegram_chat_ids,
-        db_path=db_path,
+        db_path=paths["db_path"],
         timezone=os.getenv("TIMEZONE", "Europe/Berlin"),
         notification_times=load_notification_times(resolved_filters_path),
         jobdatafeeds_max_api_requests_per_run=_get_int("JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN", 2),
@@ -228,10 +248,10 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         priority_companies=load_priority_companies(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
         allow_all_sources=_get_bool("ALLOW_ALL_SOURCES", True),
-        cv_path=Path(cv_path) if cv_path else None,
-        cover_letter_path=Path(cover_letter_path) if cover_letter_path else None,
-        log_path=log_path,
-        filtered_out_jobs_log_path=filtered_out_jobs_log_path,
+        cv_path=paths["cv_path"],
+        cover_letter_path=paths["cover_letter_path"],
+        log_path=paths["log_path"],
+        filtered_out_jobs_log_path=paths["filtered_out_jobs_log_path"],
         env_path=env_file,
         filters_path=resolved_filters_path,
     )

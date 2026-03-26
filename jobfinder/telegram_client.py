@@ -10,6 +10,9 @@ from urllib.request import Request, urlopen
 
 MAX_MESSAGE_LENGTH = 4000
 LOGGER = logging.getLogger(__name__)
+EMPTY_RUN_MESSAGE = "No new matching jobs were found in the last run."
+UNKNOWN_WINDOW_HEADER = "Jobs posted from unknown-unknown"
+TRUNCATED_WARNING = "Warning: the fetch stopped early because the configured request cap was reached."
 
 
 def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
@@ -44,6 +47,23 @@ def _chunks_blocks(blocks: Sequence[str]) -> List[str]:
     return messages
 
 
+def _build_header(lower_bound: Optional[datetime], upper_bound: Optional[datetime]) -> str:
+    if lower_bound and upper_bound:
+        return (
+            "Jobs posted from "
+            f"{lower_bound.astimezone().strftime('%d.%m.%Y %H:%M')}-"
+            f"{upper_bound.astimezone().strftime('%d.%m.%Y %H:%M')}"
+        )
+    return UNKNOWN_WINDOW_HEADER
+
+
+def _build_truncated_warning(incomplete_titles: Sequence[str] | None) -> str:
+    warning = TRUNCATED_WARNING
+    if incomplete_titles:
+        warning += f"\nIncomplete titles: {', '.join(incomplete_titles)}"
+    return warning
+
+
 def format_job_line(row) -> str:
     posted = _format_timestamp(row["date_created"] or row["fetched_at"])
     title = html.escape(row["title"])
@@ -67,25 +87,13 @@ def build_digest_messages(
     incomplete_titles: Sequence[str] | None = None,
 ) -> List[str]:
     if not rows:
-        return ["No new matching jobs were found in the last run."] if empty_notice else []
+        return [EMPTY_RUN_MESSAGE] if empty_notice else []
 
-    if lower_bound and upper_bound:
-        header = (
-            "Jobs posted from "
-            f"{lower_bound.astimezone().strftime('%d.%m.%Y %H:%M')}-"
-            f"{upper_bound.astimezone().strftime('%d.%m.%Y %H:%M')}"
-        )
-    else:
-        header = "Jobs posted from unknown-unknown"
-
-    blocks = [header]
+    blocks = [_build_header(lower_bound, upper_bound)]
     blocks.extend(format_job_line(row) for row in rows)
 
     if truncated:
-        warning = "Warning: the fetch stopped early because the configured request cap was reached."
-        if incomplete_titles:
-            warning += f"\nIncomplete titles: {', '.join(incomplete_titles)}"
-        blocks.append(warning)
+        blocks.append(_build_truncated_warning(incomplete_titles))
 
     return _chunks_blocks(blocks)
 

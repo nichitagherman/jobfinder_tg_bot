@@ -20,24 +20,16 @@ def build_duplicate_fingerprint(
     company: str,
     description: str,
 ) -> str:
-    key = "|".join(
-        [
-            normalize_text(title),
-            normalize_text(company),
-            normalize_text(description),
-        ]
-    )
+    key = _join_normalized_parts(title, company, description)
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
 def build_similarity_key(job: NormalizedJob) -> str:
-    return "|".join(
-        [
-            normalize_text(job.title),
-            normalize_text(job.company),
-            normalize_text(job.description),
-        ]
-    )
+    return _join_normalized_parts(job.title, job.company, job.description)
+
+
+def _join_normalized_parts(*parts: str) -> str:
+    return "|".join(normalize_text(part) for part in parts)
 
 
 def _source_rank(job: NormalizedJob) -> tuple:
