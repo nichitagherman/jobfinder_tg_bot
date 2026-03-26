@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from typing import Iterable, List, Sequence
+from typing import Iterable, List
 
 from .models import NormalizedJob
 
@@ -18,20 +18,13 @@ def normalize_text(value: str) -> str:
 def build_duplicate_fingerprint(
     title: str,
     company: str,
-    workplace: Sequence[str],
-    city: str,
-    state: str,
-    canonical_url: str,
+    description: str,
 ) -> str:
-    normalized_url = canonical_url.strip().lower()
     key = "|".join(
         [
             normalize_text(title),
             normalize_text(company),
-            normalize_text(" ".join(workplace)),
-            normalize_text(city),
-            normalize_text(state),
-            normalized_url,
+            normalize_text(description),
         ]
     )
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
@@ -42,9 +35,7 @@ def build_similarity_key(job: NormalizedJob) -> str:
         [
             normalize_text(job.title),
             normalize_text(job.company),
-            normalize_text(" ".join(job.work_place)),
-            normalize_text(job.city),
-            normalize_text(job.state),
+            normalize_text(job.description),
         ]
     )
 

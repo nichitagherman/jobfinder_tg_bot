@@ -410,6 +410,8 @@ class DedupeTests(unittest.TestCase):
         base.source = source
         base.canonical_url = url
         base.external_id = f"{portal}-{source}"
+        base.title = title
+        base.company = company
         return base
 
     def test_linkedin_wins_duplicate_group(self):
@@ -423,6 +425,12 @@ class DedupeTests(unittest.TestCase):
         stepstone = self._job("stepstone", "stepstone", "https://stepstone.example")
         jobs = mark_canonical_jobs([linkedin, stepstone])
         self.assertEqual(sum(1 for job in jobs if job.is_canonical), 1)
+
+    def test_mark_canonical_jobs_keeps_different_companies_separate(self):
+        first = self._job("linkedin", "monster_de", "https://linkedin.example", company="Microsoft")
+        second = self._job("stepstone", "stepstone", "https://stepstone.example", company="Google")
+        jobs = mark_canonical_jobs([first, second])
+        self.assertEqual(sum(1 for job in jobs if job.is_canonical), 2)
 
 
 class StorageTests(unittest.TestCase):

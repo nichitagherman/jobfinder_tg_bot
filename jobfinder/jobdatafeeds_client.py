@@ -115,10 +115,7 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime) -> Normalize
     fingerprint = build_duplicate_fingerprint(
         title=str(raw_job.get("title") or _get_nested(json_ld, "title") or ""),
         company=company,
-        workplace=work_place,
-        city=city,
-        state=state,
-        canonical_url=canonical_url,
+        description=str(_get_nested(json_ld, "description") or raw_job.get("description") or ""),
     )
 
     return NormalizedJob(
