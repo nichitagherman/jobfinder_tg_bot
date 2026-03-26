@@ -91,9 +91,9 @@ def build_digest_messages(
 
 
 class TelegramClient:
-    def __init__(self, bot_token: str, chat_id: str):
+    def __init__(self, bot_token: str, chat_ids: Sequence[str]):
         self.bot_token = bot_token
-        self.chat_id = chat_id
+        self.chat_ids = list(chat_ids)
 
     @property
     def _send_message_url(self) -> str:
@@ -101,32 +101,34 @@ class TelegramClient:
 
     def send_messages(self, messages: Iterable[str]) -> datetime:
         messages = list(messages)
-        LOGGER.info("Sending Telegram messages: count=%s", len(messages))
+        LOGGER.info("Sending Telegram messages: count=%s chat_ids=%s", len(messages), len(self.chat_ids))
         sent_at = datetime.now().astimezone()
-        for index, message in enumerate(messages, start=1):
-            LOGGER.info(
-                "Sending Telegram message %s/%s: chars=%s",
-                index,
-                len(messages),
-                len(message),
-            )
-            payload = json.dumps(
-                {
-                    "chat_id": self.chat_id,
-                    "text": message,
-                    "parse_mode": "HTML",
-                    "disable_web_page_preview": True,
-                }
-            ).encode("utf-8")
-            request = Request(
-                self._send_message_url,
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            with urlopen(request, timeout=30) as response:
-                body = json.loads(response.read().decode("utf-8"))
-                if not body.get("ok"):
-                    raise RuntimeError(f"Telegram send failed: {body}")
-        LOGGER.info("Telegram send complete: count=%s sent_at=%s", len(messages), sent_at.isoformat())
+        for chat_id in self.chat_ids:
+            for index, message in enumerate(messages, start=1):
+                LOGGER.info(
+                    "Sending Telegram message %s/%s to chat_id=%s: chars=%s",
+                    index,
+                    len(messages),
+                    chat_id,
+                    len(message),
+                )
+                payload = json.dumps(
+                    {
+                        "chat_id": chat_id,
+                        "text": message,
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True,
+                    }
+                ).encode("utf-8")
+                request = Request(
+                    self._send_message_url,
+                    data=payload,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urlopen(request, timeout=30) as response:
+                    body = json.loads(response.read().decode("utf-8"))
+                    if not body.get("ok"):
+                        raise RuntimeError(f"Telegram send failed: {body}")
+        LOGGER.info("Telegram send complete: count=%s chat_ids=%s sent_at=%s", len(messages), len(self.chat_ids), sent_at.isoformat())
         return sent_at

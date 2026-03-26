@@ -47,6 +47,13 @@ def _get_optional(name: str) -> Optional[str]:
     return stripped or None
 
 
+def _get_list(name: str) -> List[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
 def build_api_title_query(title: str) -> str:
     tokens = [token.lower() for token in _TITLE_TOKEN_RE.findall(title)]
     if not tokens:
@@ -66,7 +73,7 @@ class Settings:
     jobdatafeeds_api_key: str
     jobdatafeeds_api_host: str
     telegram_bot_token: str
-    telegram_chat_id: str
+    telegram_chat_ids: List[str]
     db_path: Path
     timezone: str
     notification_times: List[time]
@@ -170,11 +177,19 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
     load_dotenv(env_file)
     resolved_filters_path = Path(filters_path) if filters_path else env_file.parent / "jobfinder_filters.toml"
 
+    telegram_chat_ids = _get_list("TELEGRAM_CHAT_IDS")
+    if not telegram_chat_ids:
+        legacy_chat_id = _get_optional("TELEGRAM_CHAT_ID")
+        if legacy_chat_id:
+            telegram_chat_ids = [legacy_chat_id]
+
     missing = [
         name
-        for name in ("JOBDATAFEEDS_API_TOKEN", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
+        for name in ("JOBDATAFEEDS_API_TOKEN", "TELEGRAM_BOT_TOKEN")
         if not _get_optional(name)
     ]
+    if not telegram_chat_ids:
+        missing.append("TELEGRAM_CHAT_ID or TELEGRAM_CHAT_IDS")
     if missing:
         raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
 
@@ -192,7 +207,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
             "JOBDATAFEEDS_API_HOST", "daily-international-job-postings.p.rapidapi.com"
         ),
         telegram_bot_token=os.environ["TELEGRAM_BOT_TOKEN"],
-        telegram_chat_id=os.environ["TELEGRAM_CHAT_ID"],
+        telegram_chat_ids=telegram_chat_ids,
         db_path=db_path,
         timezone=os.getenv("TIMEZONE", "Europe/Berlin"),
         notification_times=load_notification_times(resolved_filters_path),

@@ -122,6 +122,7 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings(str(env_path))
             self.assertEqual(settings.max_api_requests_per_run, 2)
             self.assertEqual(len(settings.build_presets()), 2)
+            self.assertEqual(settings.telegram_chat_ids, ["12345"])
             self.assertEqual(
                 settings.search_titles,
                 [
@@ -159,6 +160,23 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.search_titles, ["strategy"])
             self.assertEqual(settings.notification_times, [time(9, 0), time(17, 0)])
             self.assertEqual(settings.filters_path, custom_filters)
+
+    def test_load_settings_supports_multiple_chat_ids(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            env_path, _ = write_config_files(root)
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "JOBDATAFEEDS_API_TOKEN=test-token",
+                        "TELEGRAM_BOT_TOKEN=test-bot",
+                        "TELEGRAM_CHAT_IDS=12345,67890",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            settings = load_settings(str(env_path))
+            self.assertEqual(settings.telegram_chat_ids, ["12345", "67890"])
 
 
 class ScheduleTests(unittest.TestCase):
@@ -604,6 +622,31 @@ class TelegramTests(unittest.TestCase):
             [row["company"] for row in sorted_rows],
             ["Zalando", "delivery hero", "AUTO1", "Other Co"],
         )
+
+    def test_telegram_client_sends_each_message_to_each_chat_id(self):
+        from jobfinder.telegram_client import TelegramClient
+
+        sent_payloads = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return b'{"ok": true}'
+
+        def fake_urlopen(request, timeout=30):
+            sent_payloads.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse()
+
+        with patch("jobfinder.telegram_client.urlopen", side_effect=fake_urlopen):
+            TelegramClient("test-bot", ["123", "456"]).send_messages(["hello", "world"])
+
+        self.assertEqual(len(sent_payloads), 4)
+        self.assertEqual([payload["chat_id"] for payload in sent_payloads], ["123", "123", "456", "456"])
 
 
 if __name__ == "__main__":

@@ -61,7 +61,7 @@ def run_daily(
 
     storage = Storage(settings.db_path)
     client = JobDataFeedsClient(settings)
-    telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_id)
+    telegram = TelegramClient(settings.telegram_bot_token, settings.telegram_chat_ids)
 
     lower_bound = storage.get_last_checkpoint()
     if lower_bound is None:
