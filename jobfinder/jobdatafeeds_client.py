@@ -386,26 +386,6 @@ class JobDataFeedsClient:
         )
         return True
 
-    def _within_window(self, job: NormalizedJob, context: RunContext, *, remote_only: bool) -> bool:
-        posted_at = _parse_iso(job.date_created)
-        if context.lower_bound and posted_at and posted_at <= context.lower_bound:
-            self._rejected_job(
-                reason=self._build_filtered_out_reason("before_or_equal_lower_bound"),
-                job=job,
-                context=context,
-                remote_only=remote_only,
-            )
-            return False
-        if posted_at and posted_at > context.upper_bound:
-            self._rejected_job(
-                reason=self._build_filtered_out_reason("after_upper_bound"),
-                job=job,
-                context=context,
-                remote_only=remote_only,
-            )
-            return False
-        return True
-
     def _passes_filters(self, job: NormalizedJob, context: RunContext, *, remote_only: bool) -> bool:
         if not title_matches(job, self.settings.search_titles):
             self._rejected_job(
@@ -436,7 +416,7 @@ class JobDataFeedsClient:
             )
             return False
 
-        return self._within_window(job, context, remote_only=remote_only)
+        return True
 
     def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
         self._apply_request_cooldown()

@@ -27,16 +27,6 @@ PAGE_SIZE = 10
 DEFAULT_LANGUAGE = ""
 
 
-def _parse_iso(value: Optional[str]) -> Optional[datetime]:
-    if not value:
-        return None
-    normalized = value.replace("Z", "+00:00")
-    try:
-        return datetime.fromisoformat(normalized)
-    except ValueError:
-        return None
-
-
 def _ensure_list(value: object) -> List[str]:
     if isinstance(value, list):
         return [str(item) for item in value if str(item).strip()]
@@ -321,23 +311,6 @@ class JSearchClient:
             )
             return False
 
-        posted_at = _parse_iso(job.date_created)
-        if context.lower_bound and posted_at and posted_at <= context.lower_bound:
-            self._log_filtered_out_job(
-                reason=self._build_filtered_out_reason("before_or_equal_lower_bound"),
-                job=job,
-                context=context,
-                remote_query=remote_query,
-            )
-            return False
-        if posted_at and posted_at > context.upper_bound:
-            self._log_filtered_out_job(
-                reason=self._build_filtered_out_reason("after_upper_bound"),
-                job=job,
-                context=context,
-                remote_query=remote_query,
-            )
-            return False
         return True
 
     def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:

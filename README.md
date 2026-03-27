@@ -89,7 +89,7 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 - Each outbound JobDataFeeds and JSearch call is logged in `runtime/jobfinder.log` as a provider-specific cURL-like command with the RapidAPI key redacted.
 - The implementation assumes the JobDataFeeds API can be queried with page-based pagination and JSON output.
 - JSearch uses RapidAPI host `jsearch.p.rapidapi.com` and maps the fetch window to the closest supported `date_posted` bucket: `today`, `3days`, `week`, `month`, or `anytime`.
-- Date filtering is still sent with `dateCreatedMin` / `dateCreatedMax`; for multiple same-day runs this may hit the same calendar day upstream, but the exact SQLite checkpoint and local timestamp filtering still constrain results to the relevant time window.
+- Date filtering is sent with `dateCreatedMin` / `dateCreatedMax`
 - Local Berlin targeting now uses `geoPointLat`, `geoPointLng`, and `geoDistance` rather than `city=Berlin`.
 - If a run stops before all likely pages are fetched, the DB stores the incomplete titles for that run and the Telegram digest warns about them.
 - The `jobs` table has a dedicated `collector` column so you can distinguish rows inserted by `jobdatafeeds` vs `jsearch` without overloading upstream `source`.
