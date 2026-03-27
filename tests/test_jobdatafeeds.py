@@ -494,6 +494,27 @@ class JSearchTests(unittest.TestCase):
         context = type("Ctx", (), {"lower_bound": None, "upper_bound": datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)})()
         self.assertEqual(select_date_posted(context), "anytime")
 
+    def test_select_date_posted_respects_calendar_day_boundaries(self):
+        context = type(
+            "Ctx",
+            (),
+            {
+                "lower_bound": datetime(2026, 3, 25, 22, 0, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 26, 8, 0, tzinfo=timezone.utc),
+            },
+        )()
+        self.assertEqual(select_date_posted(context), "3days")
+
+        context = type(
+            "Ctx",
+            (),
+            {
+                "lower_bound": datetime(2026, 3, 26, 0, 0, tzinfo=timezone.utc),
+                "upper_bound": datetime(2026, 3, 26, 8, 0, tzinfo=timezone.utc),
+            },
+        )()
+        self.assertEqual(select_date_posted(context), "today")
+
     def test_normalize_jsearch_job_maps_payload(self):
         job = normalize_jsearch_job(
             SAMPLE_JSEARCH_JOB,

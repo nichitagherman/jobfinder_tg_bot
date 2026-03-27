@@ -142,14 +142,15 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
 def select_date_posted(context: RunContext) -> str:
     if context.lower_bound is None:
         return "anytime"
-    window = context.upper_bound - context.lower_bound
-    if window <= timedelta(days=1):
+
+    day_start = context.upper_bound.replace(hour=0, minute=0, second=0, microsecond=0)
+    if context.lower_bound >= day_start:
         return "today"
-    if window <= timedelta(days=3):
+    if context.lower_bound >= day_start - timedelta(days=2):
         return "3days"
-    if window <= timedelta(days=7):
+    if context.lower_bound >= day_start - timedelta(days=6):
         return "week"
-    if window <= timedelta(days=30):
+    if context.lower_bound >= day_start - timedelta(days=29):
         return "month"
     return "anytime"
 
