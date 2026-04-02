@@ -13,13 +13,10 @@ from urllib.request import Request, urlopen
 
 from .config import Settings
 from .dedupe import build_duplicate_fingerprint, normalize_text
-from .jobdatafeeds_client import excluded_by_seniority_title, title_matches
-from .logging_utils import FILTERED_OUT_LOGGER_NAME
 from .models import FetchSummary, NormalizedJob, RunContext
 
 
 LOGGER = logging.getLogger(__name__)
-FILTERED_OUT_LOGGER = logging.getLogger(FILTERED_OUT_LOGGER_NAME)
 PROVIDER_NAME = "jsearch"
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
@@ -175,36 +172,6 @@ class JSearchClient:
     def _mark_request_attempt(self) -> None:
         self._last_request_monotonic = time.monotonic()
 
-    def _log_filtered_out_job(
-        self,
-        *,
-        reason: str,
-        job: NormalizedJob,
-        context: RunContext,
-        remote_query: bool,
-        details: Optional[Dict[str, object]] = None,
-    ) -> None:
-        payload = {
-            "reason": reason,
-            "provider": PROVIDER_NAME,
-            "title": job.title,
-            "company": job.company,
-            "query_text": job.query_text,
-            "portal": job.portal,
-            "source": job.source,
-            "city": job.city,
-            "state": job.state,
-            "country_code": job.country_code,
-            "date_created": job.date_created,
-            "canonical_url": job.canonical_url,
-            "remote_query": remote_query,
-            "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
-            "upper_bound": context.upper_bound.isoformat(),
-            "details": details or {},
-            "raw_job": job.raw_json,
-        }
-        FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
-
     def _request_headers(self) -> Dict[str, str]:
         return {
             "Content-Type": "application/json",
@@ -255,9 +222,6 @@ class JSearchClient:
     def _local_query_text(self, title: str) -> str:
         return f"{title} in Berlin"
 
-    def _build_filtered_out_reason(self, suffix: str) -> str:
-        return f"{PROVIDER_NAME}_{suffix}"
-
     def _remaining_titles(self, queue: Deque[tuple[str, int]]) -> List[str]:
         return sorted({title for title, _ in queue})
 
@@ -290,29 +254,6 @@ class JSearchClient:
             payload.get("status"),
             len(self._raw_results(payload)),
         )
-
-    def _passes_filters(self, job: NormalizedJob, context: RunContext, *, remote_query: bool) -> bool:
-        if not title_matches(job, self.settings.jsearch_search_titles):
-            self._log_filtered_out_job(
-                reason=self._build_filtered_out_reason("title_mismatch"),
-                job=job,
-                context=context,
-                remote_query=remote_query,
-            )
-            return False
-
-        seniority_markers = excluded_by_seniority_title(job)
-        if seniority_markers:
-            self._log_filtered_out_job(
-                reason=self._build_filtered_out_reason("seniority_title_excluded"),
-                job=job,
-                context=context,
-                remote_query=remote_query,
-                details={"matched_markers": seniority_markers},
-            )
-            return False
-
-        return True
 
     def _perform_request(self, params: Dict[str, str]) -> Dict[str, object]:
         self._apply_request_cooldown()
@@ -352,10 +293,7 @@ class JSearchClient:
         for raw_item in raw_items:
             if not isinstance(raw_item, dict):
                 continue
-            job = normalize_job(raw_item, context.started_at, query_text=query_text)
-            if not self._passes_filters(job, context, remote_query=remote_query):
-                continue
-            normalized_page.append(job)
+            normalized_page.append(normalize_job(raw_item, context.started_at, query_text=query_text))
         LOGGER.info(
             "Normalized JSearch page: provider=%s kept=%s remote_query=%s",
             PROVIDER_NAME,
