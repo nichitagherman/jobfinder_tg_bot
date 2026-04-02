@@ -45,8 +45,10 @@ def previous_scheduled_runtime(now_local: datetime, notification_times) -> datet
 
 def _sort_jobs_for_output(rows, priority_companies):
     priority_companies = {company.strip().lower() for company in priority_companies}
+    collector_rank = {"jobdatafeeds": 0, "jsearch": 1}
     rows = sorted(rows, key=lambda row: row["date_created"] or row["fetched_at"] or "", reverse=True)
-    return sorted(rows, key=lambda row: 0 if (row["company"] or "").strip().lower() in priority_companies else 1)
+    rows = sorted(rows, key=lambda row: 0 if (row["company"] or "").strip().lower() in priority_companies else 1)
+    return sorted(rows, key=lambda row: collector_rank.get((row["collector"] or "").strip().lower(), 99))
 
 
 def _resolve_lower_bound(storage: Storage, now_local: datetime, notification_times) -> datetime:

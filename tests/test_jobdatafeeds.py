@@ -970,17 +970,22 @@ class TelegramTests(unittest.TestCase):
         self.assertIn("<b>Role Two</b>\n<i>Comp Two</i>", messages[0])
         self.assertIn("Apply: https://example.com/1\n\n<b>Role Two</b>", messages[0])
 
-    def test_priority_companies_sort_first_but_keep_newest_within_group(self):
+    def test_sort_jobs_for_output_orders_by_collector_then_priority_then_recency(self):
         rows = [
-            {"company": "Other Co", "date_created": "2026-03-26T10:00:00+00:00", "fetched_at": "2026-03-26T10:00:00+00:00"},
-            {"company": "delivery hero", "date_created": "2026-03-25T10:00:00+00:00", "fetched_at": "2026-03-25T10:00:00+00:00"},
-            {"company": "Zalando", "date_created": "2026-03-26T09:00:00+00:00", "fetched_at": "2026-03-26T09:00:00+00:00"},
-            {"company": "AUTO1", "date_created": "2026-03-26T11:00:00+00:00", "fetched_at": "2026-03-26T11:00:00+00:00"},
+            {"company": "Other Co", "collector": "jsearch", "date_created": "2026-03-26T10:00:00+00:00", "fetched_at": "2026-03-26T10:00:00+00:00"},
+            {"company": "delivery hero", "collector": "jobdatafeeds", "date_created": "2026-03-25T10:00:00+00:00", "fetched_at": "2026-03-25T10:00:00+00:00"},
+            {"company": "Zalando", "collector": "jobdatafeeds", "date_created": "2026-03-26T09:00:00+00:00", "fetched_at": "2026-03-26T09:00:00+00:00"},
+            {"company": "AUTO1", "collector": "jsearch", "date_created": "2026-03-26T11:00:00+00:00", "fetched_at": "2026-03-26T11:00:00+00:00"},
         ]
         sorted_rows = _sort_jobs_for_output(rows, ["Zalando", "Delivery Hero", "AUTO1 Group"])
         self.assertEqual(
-            [row["company"] for row in sorted_rows],
-            ["Zalando", "delivery hero", "AUTO1", "Other Co"],
+            [(row["collector"], row["company"]) for row in sorted_rows],
+            [
+                ("jobdatafeeds", "Zalando"),
+                ("jobdatafeeds", "delivery hero"),
+                ("jsearch", "AUTO1"),
+                ("jsearch", "Other Co"),
+            ],
         )
 
     def test_telegram_client_sends_each_message_to_each_chat_id(self):
