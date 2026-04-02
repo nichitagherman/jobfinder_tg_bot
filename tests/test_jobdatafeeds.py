@@ -117,12 +117,20 @@ priority_companies = [
   "Contentful",
 ]
 
-job_titles = [
+jobdatafeeds_job_titles = [
   "project manager",
   "project management",
   "business analyst",
   "business analytics",
   "strategy",
+]
+
+jsearch_job_titles = [
+  "project manager",
+  "project management",
+  "business analyst",
+  "business analytics",
+  "strategy analyst",
 ]
 """
 
@@ -153,13 +161,23 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(len(settings.build_presets()), 2)
             self.assertEqual(settings.telegram_chat_ids, ["12345"])
             self.assertEqual(
-                settings.search_titles,
+                settings.jobdatafeeds_search_titles,
                 [
                     "project manager",
                     "project management",
                     "business analyst",
                     "business analytics",
                     "strategy",
+                ],
+            )
+            self.assertEqual(
+                settings.jsearch_search_titles,
+                [
+                    "project manager",
+                    "project management",
+                    "business analyst",
+                    "business analytics",
+                    "strategy analyst",
                 ],
             )
             self.assertEqual(
@@ -182,11 +200,19 @@ class ConfigTests(unittest.TestCase):
             env_path, _ = write_config_files(root)
             custom_filters = root / "custom_filters.toml"
             custom_filters.write_text(
-                'notification_times = ["09:00", "17:00"]\njob_titles = ["strategy"]\n',
+                '\n'.join(
+                    [
+                        'notification_times = ["09:00", "17:00"]',
+                        'jobdatafeeds_job_titles = ["strategy"]',
+                        'jsearch_job_titles = ["strategy analyst"]',
+                        '',
+                    ]
+                ),
                 encoding="utf-8",
             )
             settings = load_settings(str(env_path), filters_path=str(custom_filters))
-            self.assertEqual(settings.search_titles, ["strategy"])
+            self.assertEqual(settings.jobdatafeeds_search_titles, ["strategy"])
+            self.assertEqual(settings.jsearch_search_titles, ["strategy analyst"])
             self.assertEqual(settings.notification_times, [time(9, 0), time(17, 0)])
             self.assertEqual(settings.filters_path, custom_filters)
 
@@ -643,7 +669,8 @@ class FetchSchedulingTests(unittest.TestCase):
             "\n".join(
                 [
                     'notification_times = ["11:00", "14:00", "18:00"]',
-                    'job_titles = ["alpha", "beta", "gamma"]',
+                    'jobdatafeeds_job_titles = ["alpha", "beta", "gamma"]',
+                    'jsearch_job_titles = ["alpha analyst", "beta analyst", "gamma analyst"]',
                     "",
                 ]
             ),
@@ -722,7 +749,8 @@ class JSearchFetchTests(unittest.TestCase):
             "\n".join(
                 [
                     'notification_times = ["11:00", "14:00", "18:00"]',
-                    'job_titles = ["alpha", "beta", "gamma"]',
+                    'jobdatafeeds_job_titles = ["alpha", "beta", "gamma"]',
+                    'jsearch_job_titles = ["alpha analyst", "beta analyst", "gamma analyst"]',
                     "",
                 ]
             ),
@@ -734,11 +762,11 @@ class JSearchFetchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = self._settings(Path(tmpdir), max_requests=5)
             payloads = {
-                ("alpha in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a1-{i}") for i in range(10)]},
-                ("beta in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Beta role", job_id=f"b1-{i}") for i in range(3)]},
-                ("gamma in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma role", job_id=f"g1-{i}") for i in range(10)]},
-                ("alpha in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a2-{i}") for i in range(2)]},
-                ("gamma in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma role", job_id=f"g2-{i}") for i in range(2)]},
+                ("alpha analyst in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha Analyst", job_id=f"a1-{i}") for i in range(10)]},
+                ("beta analyst in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Beta Analyst", job_id=f"b1-{i}") for i in range(3)]},
+                ("gamma analyst in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma Analyst", job_id=f"g1-{i}") for i in range(10)]},
+                ("alpha analyst in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha Analyst", job_id=f"a2-{i}") for i in range(2)]},
+                ("gamma analyst in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma Analyst", job_id=f"g2-{i}") for i in range(2)]},
             }
             client = FakeJSearchClient(settings, payloads)
             context = type("Ctx", (), {
@@ -750,7 +778,7 @@ class JSearchFetchTests(unittest.TestCase):
             seen = [(req["query"], req["page"]) for req in client.requests]
             self.assertEqual(
                 seen,
-                [("alpha in Berlin", "1"), ("beta in Berlin", "1"), ("gamma in Berlin", "1"), ("alpha in Berlin", "2"), ("gamma in Berlin", "2")],
+                [("alpha analyst in Berlin", "1"), ("beta analyst in Berlin", "1"), ("gamma analyst in Berlin", "1"), ("alpha analyst in Berlin", "2"), ("gamma analyst in Berlin", "2")],
             )
             self.assertEqual(summary.api_requests_made, 5)
 
@@ -758,10 +786,10 @@ class JSearchFetchTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = self._settings(Path(tmpdir), max_requests=4)
             payloads = {
-                ("alpha in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a1-{i}") for i in range(10)]},
-                ("beta in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Beta role", job_id=f"b1-{i}") for i in range(10)]},
-                ("gamma in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma role", job_id=f"g1-{i}") for i in range(10)]},
-                ("alpha in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha role", job_id=f"a2-{i}") for i in range(2)]},
+                ("alpha analyst in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha Analyst", job_id=f"a1-{i}") for i in range(10)]},
+                ("beta analyst in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Beta Analyst", job_id=f"b1-{i}") for i in range(10)]},
+                ("gamma analyst in Berlin", 1, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Gamma Analyst", job_id=f"g1-{i}") for i in range(10)]},
+                ("alpha analyst in Berlin", 2, "false"): {"status": "OK", "data": [dict(SAMPLE_JSEARCH_JOB, job_title="Alpha Analyst", job_id=f"a2-{i}") for i in range(2)]},
             }
             client = FakeJSearchClient(settings, payloads)
             context = type("Ctx", (), {
@@ -771,7 +799,7 @@ class JSearchFetchTests(unittest.TestCase):
             })()
             summary = client.fetch_jobs(context, include_remote=False)
             self.assertTrue(summary.was_truncated_by_request_cap)
-            self.assertEqual(summary.incomplete_titles, ["beta", "gamma"])
+            self.assertEqual(summary.incomplete_titles, ["beta analyst", "gamma analyst"])
 
 
 class RunnerAggregationTests(unittest.TestCase):
@@ -888,12 +916,18 @@ class TelegramTests(unittest.TestCase):
             upper_bound=datetime(2025, 1, 1, 18, 0, tzinfo=timezone.utc),
             incomplete_titles=["strategy", "business analyst"],
         )
-        self.assertIn("Jobs posted from 01.01.2025 18:00-01.01.2025 19:00", messages[0])
+        expected_header = (
+            "Jobs posted from "
+            f"{datetime(2025, 1, 1, 17, 0, tzinfo=timezone.utc).astimezone().strftime('%d.%m.%Y %H:%M')}-"
+            f"{datetime(2025, 1, 1, 18, 0, tzinfo=timezone.utc).astimezone().strftime('%d.%m.%Y %H:%M')}"
+        )
+        expected_posted = datetime(2025, 1, 1, 18, 0, tzinfo=timezone.utc).astimezone().strftime("%d.%m.%Y %H:%M")
+        self.assertIn(expected_header, messages[0])
         self.assertIn("Incomplete titles: strategy, business analyst", messages[0])
         self.assertIn("<b>Role</b>", messages[0])
         self.assertIn("<i>Comp</i>", messages[0])
-        self.assertIn("Posted: 01.01.2025 19:00", messages[0])
-        self.assertIn("Jobs posted from 01.01.2025 18:00-01.01.2025 19:00\n\n<b>Role</b>", messages[0])
+        self.assertIn(f"Posted: {expected_posted}", messages[0])
+        self.assertIn(f"{expected_header}\n\n<b>Role</b>", messages[0])
         self.assertTrue(messages[0].endswith("Incomplete titles: strategy, business analyst"))
 
     def test_multiple_jobs_are_separated_by_blank_lines(self):

@@ -16,8 +16,15 @@ priority_companies = [
   "Contentful"
 ]
 
-job_titles = [
+jobdatafeeds_job_titles = [
   "business",
   "operations",
   "strategy"
+]
+
+jsearch_job_titles = [
+  "business analyst",
+  "operations analyst",
+  "strategy analyst",
+  "project manager"
 ]

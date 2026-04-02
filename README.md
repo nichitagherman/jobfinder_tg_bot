@@ -36,7 +36,8 @@ cp .env.example .env
 ```
 
 3. Edit [`jobfinder_filters.toml`](/Users/nikitagerman/Desktop/jobfinder_tg_bot/jobfinder_filters.toml) to control:
-   - which job title variants are matched
+   - `jobdatafeeds_job_titles` for JobDataFeeds searches
+   - `jsearch_job_titles` for JSearch searches
    - which notification times are expected, currently `11:00`, `14:00`, and `18:00`
    - logging stays enabled by default; override `LOG_PATH` or `FILTERED_OUT_JOBS_LOG_PATH` in `.env` only if you want the log files elsewhere
 
@@ -80,7 +81,7 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 
 ## Notes
 
-- Title variants live in `jobfinder_filters.toml`; for local searches the bot now queries them fairly, one title page at a time before deeper pagination.
+- JobDataFeeds and JSearch title lists live separately in `jobfinder_filters.toml`; each provider queries its own list fairly, one title page at a time before deeper pagination.
 - Notification times also live in `jobfinder_filters.toml`; they control the expected run cadence and the fallback initial fetch window.
 - `JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN` limits JobDataFeeds requests per run.
 - `JSEARCH_MAX_API_REQUESTS_PER_RUN` limits JSearch requests per run.

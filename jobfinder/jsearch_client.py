@@ -262,7 +262,7 @@ class JSearchClient:
         return sorted({title for title, _ in queue})
 
     def _query_queue(self) -> Deque[tuple[str, int]]:
-        return deque((title, 1) for title in self.settings.search_titles)
+        return deque((title, 1) for title in self.settings.jsearch_search_titles)
 
     def _log_request(self, params: Dict[str, str]) -> None:
         curl_like = (
@@ -292,7 +292,7 @@ class JSearchClient:
         )
 
     def _passes_filters(self, job: NormalizedJob, context: RunContext, *, remote_query: bool) -> bool:
-        if not title_matches(job, self.settings.search_titles):
+        if not title_matches(job, self.settings.jsearch_search_titles):
             self._log_filtered_out_job(
                 reason=self._build_filtered_out_reason("title_mismatch"),
                 job=job,
@@ -437,7 +437,7 @@ class JSearchClient:
             PROVIDER_NAME,
             include_remote,
             self.settings.jsearch_max_api_requests_per_run,
-            self.settings.search_titles,
+            self.settings.jsearch_search_titles,
             context.lower_bound.isoformat() if context.lower_bound else None,
             context.upper_bound.isoformat(),
         )

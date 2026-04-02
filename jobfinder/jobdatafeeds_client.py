@@ -338,7 +338,7 @@ class JobDataFeedsClient:
         return sorted({title for title, _ in queue})
 
     def _local_query_queue(self) -> Deque[tuple[str, int]]:
-        return deque((title, 1) for title in self.settings.search_titles)
+        return deque((title, 1) for title in self.settings.jobdatafeeds_search_titles)
 
     def _log_request(self, params: Dict[str, str]) -> None:
         curl_like = (
@@ -387,7 +387,7 @@ class JobDataFeedsClient:
         return True
 
     def _passes_filters(self, job: NormalizedJob, context: RunContext, *, remote_only: bool) -> bool:
-        if not title_matches(job, self.settings.search_titles):
+        if not title_matches(job, self.settings.jobdatafeeds_search_titles):
             self._rejected_job(
                 reason=self._build_filtered_out_reason("title_mismatch"),
                 job=job,
@@ -440,7 +440,7 @@ class JobDataFeedsClient:
                 continue
             job = normalize_job(raw_item, context.started_at, query_text=query_text)
             if not self._passes_filters(job, context, remote_only=remote_only):
-                if not title_matches(job, self.settings.search_titles):
+                if not title_matches(job, self.settings.jobdatafeeds_search_titles):
                     rejected_wrong_title += 1
                 continue
             normalized_page.append(job)
@@ -586,7 +586,7 @@ class JobDataFeedsClient:
             include_remote,
             [preset.name for preset in self.settings.build_presets(include_remote=include_remote)],
             self.settings.jobdatafeeds_max_api_requests_per_run,
-            self.settings.search_titles,
+            self.settings.jobdatafeeds_search_titles,
             context.lower_bound.isoformat() if context.lower_bound else None,
             context.upper_bound.isoformat(),
         )

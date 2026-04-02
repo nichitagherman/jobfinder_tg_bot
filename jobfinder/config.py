@@ -125,7 +125,8 @@ class Settings:
     notification_times: List[time]
     jobdatafeeds_max_api_requests_per_run: int
     jsearch_max_api_requests_per_run: int
-    search_titles: List[str]
+    jobdatafeeds_search_titles: List[str]
+    jsearch_search_titles: List[str]
     priority_companies: List[str]
     search_country_code: str
     allow_all_sources: bool
@@ -145,7 +146,7 @@ class Settings:
         return f"https://{self.jsearch_api_host}/search"
 
     def build_presets(self, *, include_remote: bool = True) -> List[SearchPreset]:
-        title_query = " OR ".join(build_api_title_query(title) for title in self.search_titles)
+        title_query = " OR ".join(build_api_title_query(title) for title in self.jobdatafeeds_search_titles)
         common = {
             "format": "json",
             "title": title_query,
@@ -174,15 +175,22 @@ class Settings:
         return presets
 
 
-def load_filter_titles(path: Path) -> List[str]:
-    payload = load_filter_payload(path)
-    job_titles = payload.get("job_titles")
-    if not isinstance(job_titles, list):
-        raise ValueError(f"Filter config must define a 'job_titles' list: {path}")
-    titles = [str(item).strip() for item in job_titles if str(item).strip()]
+def _load_required_title_list(payload: Dict[str, Any], path: Path, key: str) -> List[str]:
+    raw_titles = payload.get(key)
+    if not isinstance(raw_titles, list):
+        raise ValueError(f"Filter config must define a '{key}' list: {path}")
+    titles = [str(item).strip() for item in raw_titles if str(item).strip()]
     if not titles:
-        raise ValueError(f"Filter config 'job_titles' list must not be empty: {path}")
+        raise ValueError(f"Filter config '{key}' list must not be empty: {path}")
     return titles
+
+
+def load_job_title_lists(path: Path) -> tuple[List[str], List[str]]:
+    payload = load_filter_payload(path)
+    return (
+        _load_required_title_list(payload, path, "jobdatafeeds_job_titles"),
+        _load_required_title_list(payload, path, "jsearch_job_titles"),
+    )
 
 
 def load_priority_companies(path: Path) -> List[str]:
@@ -230,6 +238,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
     telegram_chat_ids = _load_telegram_chat_ids()
     _validate_required_settings(telegram_chat_ids)
     paths = _resolve_paths()
+    jobdatafeeds_search_titles, jsearch_search_titles = load_job_title_lists(resolved_filters_path)
 
     return Settings(
         jobdatafeeds_api_key=os.environ["JOBDATAFEEDS_API_TOKEN"],
@@ -244,7 +253,8 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         notification_times=load_notification_times(resolved_filters_path),
         jobdatafeeds_max_api_requests_per_run=_get_int("JOBDATAFEEDS_MAX_API_REQUESTS_PER_RUN", 2),
         jsearch_max_api_requests_per_run=_get_int("JSEARCH_MAX_API_REQUESTS_PER_RUN", 2),
-        search_titles=load_filter_titles(resolved_filters_path),
+        jobdatafeeds_search_titles=jobdatafeeds_search_titles,
+        jsearch_search_titles=jsearch_search_titles,
         priority_companies=load_priority_companies(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
         allow_all_sources=_get_bool("ALLOW_ALL_SOURCES", True),
