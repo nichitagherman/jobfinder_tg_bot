@@ -8,7 +8,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from typing import Deque, Dict, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError
-from urllib.parse import urlencode, urlsplit, urlunsplit
+from urllib.parse import quote, urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from .config import Settings
@@ -180,7 +180,7 @@ class JSearchClient:
         }
 
     def _request_url(self, params: Dict[str, str]) -> str:
-        return f"{self.settings.jsearch_base_url}?{urlencode(params)}"
+        return f"{self.settings.jsearch_base_url}?{urlencode(params, quote_via=quote)}"
 
     def _perform_request_once(self, params: Dict[str, str]) -> Dict[str, object]:
         request = Request(
