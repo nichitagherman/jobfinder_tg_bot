@@ -1,5 +1,0 @@
-name: jobfinder-tg-bot
-channels:
-  - defaults
-dependencies:
-  - python=3.13
