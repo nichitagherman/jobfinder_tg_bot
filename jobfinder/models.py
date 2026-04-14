@@ -31,6 +31,10 @@ class NormalizedJob:
     date_created: Optional[str]
     date_active: Optional[str]
     date_expired: Optional[str]
+    salary_min: Optional[float]
+    salary_max: Optional[float]
+    salary_currency: Optional[str]
+    salary_period: Optional[str]
     canonical_url: str
     description: str
     duplicate_fingerprint: str

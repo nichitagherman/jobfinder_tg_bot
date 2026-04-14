@@ -560,6 +560,54 @@ class NormalizationTests(unittest.TestCase):
         job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
         self.assertEqual(excluded_by_seniority_title(job, ["Senior", "Engineer"]), [])
 
+    def test_normalize_job_extracts_salary_from_base_salary(self):
+        raw = dict(SAMPLE_JOB)
+        raw["title"] = "Business Analyst"
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["title"] = "Business Analyst"
+        raw["jsonLD"]["salaryCurrency"] = "EUR"
+        raw["jsonLD"]["baseSalary"] = {
+            "@type": "MonetaryAmount",
+            "value": {"minValue": "50000", "maxValue": "70000", "unitText": "Year"},
+        }
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertEqual(job.salary_min, 50000.0)
+        self.assertEqual(job.salary_max, 70000.0)
+        self.assertEqual(job.salary_currency, "EUR")
+        self.assertEqual(job.salary_period, "year")
+
+    def test_normalize_job_extracts_hourly_single_value_salary(self):
+        raw = dict(SAMPLE_JOB)
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["salaryCurrency"] = "EUR"
+        raw["jsonLD"]["baseSalary"] = {
+            "@type": "MonetaryAmount",
+            "value": {"minValue": "22.00", "maxValue": "22.00", "unitText": "HOUR"},
+        }
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertEqual(job.salary_min, 22.0)
+        self.assertEqual(job.salary_max, 22.0)
+        self.assertEqual(job.salary_period, "hour")
+
+    def test_normalize_job_falls_back_to_top_level_salary(self):
+        raw = dict(SAMPLE_JOB)
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"].pop("baseSalary", None)
+        raw["jsonLD"]["salaryCurrency"] = "EUR"
+        raw["minSalary"] = 40000
+        raw["maxSalary"] = 65000
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertEqual(job.salary_min, 40000.0)
+        self.assertEqual(job.salary_max, 65000.0)
+        self.assertEqual(job.salary_currency, "EUR")
+
+    def test_normalize_job_keeps_salary_empty_when_missing(self):
+        job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        self.assertIsNone(job.salary_min)
+        self.assertIsNone(job.salary_max)
+        self.assertIsNone(job.salary_currency)
+        self.assertIsNone(job.salary_period)
+
 
 class JSearchTests(unittest.TestCase):
     def test_select_date_posted_uses_smallest_supported_bucket(self):
@@ -620,6 +668,10 @@ class JSearchTests(unittest.TestCase):
         self.assertEqual(job.source, "jsearch")
         self.assertEqual(job.work_place, [])
         self.assertEqual(job.work_type, ["fulltime"])
+        self.assertIsNone(job.salary_min)
+        self.assertIsNone(job.salary_max)
+        self.assertIsNone(job.salary_currency)
+        self.assertIsNone(job.salary_period)
         self.assertEqual(
             job.canonical_url,
             "https://linkedin.com/jobs/view/pmo-manager-in-turnaround-programm-%E2%80%93-berlin-at-stadler-4390701473",
@@ -724,12 +776,94 @@ class StorageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             storage = Storage(Path(tmpdir) / "jobs.sqlite3")
             job = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
+            job.salary_min = 50000.0
+            job.salary_max = 70000.0
+            job.salary_currency = "EUR"
+            job.salary_period = "year"
             storage.upsert_jobs([job])
             jobs = storage.get_all_jobs()
             self.assertEqual(len(jobs), 1)
             self.assertEqual(jobs[0].collector, "jobdatafeeds")
             self.assertEqual(jobs[0].query_text, "")
             self.assertEqual(jobs[0].title, "Project Management Lead")
+            self.assertEqual(jobs[0].salary_min, 50000.0)
+            self.assertEqual(jobs[0].salary_max, 70000.0)
+            self.assertEqual(jobs[0].salary_currency, "EUR")
+            self.assertEqual(jobs[0].salary_period, "year")
+
+    def test_storage_migrates_salary_columns(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / "jobs.sqlite3"
+            import sqlite3
+
+            conn = sqlite3.connect(db_path)
+            conn.executescript(
+                """
+                CREATE TABLE jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    external_id TEXT NOT NULL,
+                    collector TEXT NOT NULL DEFAULT 'jobdatafeeds',
+                    query_text TEXT NOT NULL DEFAULT '',
+                    portal TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    company TEXT NOT NULL,
+                    country_code TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    city TEXT NOT NULL,
+                    timezone TEXT NOT NULL,
+                    timezone_offset INTEGER,
+                    work_place_json TEXT NOT NULL,
+                    work_type_json TEXT NOT NULL,
+                    contract_type_json TEXT NOT NULL,
+                    career_level_json TEXT NOT NULL,
+                    occupation TEXT NOT NULL,
+                    industry TEXT NOT NULL,
+                    language TEXT NOT NULL,
+                    is_direct INTEGER NOT NULL,
+                    is_recruiter INTEGER NOT NULL,
+                    date_created TEXT,
+                    date_active TEXT,
+                    date_expired TEXT,
+                    canonical_url TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    duplicate_fingerprint TEXT NOT NULL,
+                    is_canonical INTEGER NOT NULL DEFAULT 0,
+                    sent_at TEXT,
+                    fetched_at TEXT NOT NULL,
+                    raw_json TEXT NOT NULL,
+                    UNIQUE (portal, source, external_id)
+                );
+                CREATE TABLE runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    status TEXT NOT NULL,
+                    api_requests_made INTEGER NOT NULL DEFAULT 0,
+                    jobs_fetched INTEGER NOT NULL DEFAULT 0,
+                    jobs_inserted INTEGER NOT NULL DEFAULT 0,
+                    jobs_canonical INTEGER NOT NULL DEFAULT 0,
+                    was_truncated_by_request_cap INTEGER NOT NULL DEFAULT 0,
+                    incomplete_titles_json TEXT NOT NULL DEFAULT '[]',
+                    error_message TEXT
+                );
+                CREATE TABLE checkpoints (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    last_successful_upper_bound TEXT
+                );
+                INSERT INTO checkpoints (id, last_successful_upper_bound) VALUES (1, NULL);
+                """
+            )
+            conn.commit()
+            conn.close()
+
+            storage = Storage(db_path)
+            with storage.connect() as migrated:
+                columns = {row["name"] for row in migrated.execute("PRAGMA table_info(jobs)").fetchall()}
+            self.assertIn("salary_min", columns)
+            self.assertIn("salary_max", columns)
+            self.assertIn("salary_currency", columns)
+            self.assertIn("salary_period", columns)
 
     def test_finalize_run_persists_incomplete_titles_and_query_count(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1297,6 +1431,75 @@ class TelegramTests(unittest.TestCase):
         self.assertIn("<b>Role One</b>\n<i>Comp One</i>", messages[0])
         self.assertIn("<b>Role Two</b>\n<i>Comp Two</i>", messages[0])
         self.assertIn("Apply: https://example.com/1\n\n<b>Role Two</b>", messages[0])
+
+    def test_telegram_message_formats_salary_range(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role",
+                "company": "Comp",
+                "portal": "linkedin",
+                "source": "x",
+                "canonical_url": "https://example.com",
+                "salary_min": 50000.0,
+                "salary_max": 70000.0,
+                "salary_currency": "EUR",
+                "salary_period": "year",
+            }
+        ]
+        messages = build_digest_messages(rows, truncated=False, empty_notice=True)
+        self.assertIn("Salary: EUR 50,000-70,000 / year", messages[0])
+
+    def test_telegram_message_formats_salary_minimum_only(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role",
+                "company": "Comp",
+                "portal": "linkedin",
+                "source": "x",
+                "canonical_url": "https://example.com",
+                "salary_min": 50000.0,
+                "salary_max": None,
+                "salary_currency": "EUR",
+                "salary_period": "year",
+            }
+        ]
+        messages = build_digest_messages(rows, truncated=False, empty_notice=True)
+        self.assertIn("Salary: from EUR 50,000 / year", messages[0])
+
+    def test_telegram_message_omits_salary_without_numeric_value(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role",
+                "company": "Comp",
+                "portal": "linkedin",
+                "source": "x",
+                "canonical_url": "https://example.com",
+                "salary_min": None,
+                "salary_max": None,
+                "salary_currency": "EUR",
+                "salary_period": "year",
+            }
+        ]
+        messages = build_digest_messages(rows, truncated=False, empty_notice=True)
+        self.assertNotIn("Salary:", messages[0])
 
     def test_sort_jobs_for_output_orders_by_collector_then_priority_then_recency(self):
         rows = [

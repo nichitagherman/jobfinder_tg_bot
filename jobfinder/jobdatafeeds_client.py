@@ -78,6 +78,46 @@ def _job_description(raw_job: Dict[str, object], json_ld: Dict[str, object]) -> 
     return str(_get_nested(json_ld, "description") or raw_job.get("description") or "")
 
 
+def _parse_salary_value(value: object) -> Optional[float]:
+    if value in ("", None):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_salary_period(value: object) -> Optional[str]:
+    normalized = normalize_text(str(value or ""))
+    if normalized in {"year", "jahr"}:
+        return "year"
+    if normalized == "hour":
+        return "hour"
+    if normalized == "month":
+        return "month"
+    if normalized == "week":
+        return "week"
+    if normalized == "day":
+        return "day"
+    return None
+
+
+def _extract_salary(raw_job: Dict[str, object], json_ld: Dict[str, object]) -> tuple[Optional[float], Optional[float], Optional[str], Optional[str]]:
+    base_salary = json_ld.get("baseSalary") if isinstance(json_ld.get("baseSalary"), dict) else {}
+    base_salary_value = base_salary.get("value") if isinstance(base_salary.get("value"), dict) else {}
+
+    salary_min = _parse_salary_value(base_salary_value.get("minValue"))
+    salary_max = _parse_salary_value(base_salary_value.get("maxValue"))
+    if salary_min is None:
+        salary_min = _parse_salary_value(raw_job.get("minSalary"))
+    if salary_max is None:
+        salary_max = _parse_salary_value(raw_job.get("maxSalary"))
+
+    salary_currency = str(json_ld.get("salaryCurrency") or base_salary.get("currency") or "").strip() or None
+    salary_period = _normalize_salary_period(base_salary_value.get("unitText"))
+    return salary_min, salary_max, salary_currency, salary_period
+
+
 def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_text: str = "") -> NormalizedJob:
     json_ld = raw_job.get("jsonLD") if isinstance(raw_job.get("jsonLD"), dict) else {}
     canonical_url = _normalize_canonical_url(
@@ -105,6 +145,7 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
 
     work_place = _ensure_list(raw_job.get("workPlace"))
     description = _job_description(raw_job, json_ld)
+    salary_min, salary_max, salary_currency, salary_period = _extract_salary(raw_job, json_ld)
     fingerprint = build_duplicate_fingerprint(
         title=str(raw_job.get("title") or _get_nested(json_ld, "title") or ""),
         company=company,
@@ -136,6 +177,10 @@ def normalize_job(raw_job: Dict[str, object], fetched_at: datetime, *, query_tex
         date_created=str(raw_job.get("dateCreated") or _get_nested(json_ld, "datePosted") or ""),
         date_active=str(raw_job.get("dateActive") or ""),
         date_expired=str(raw_job.get("dateExpired") or _get_nested(json_ld, "validThrough") or ""),
+        salary_min=salary_min,
+        salary_max=salary_max,
+        salary_currency=salary_currency,
+        salary_period=salary_period,
         canonical_url=canonical_url,
         description=description,
         duplicate_fingerprint=fingerprint,

@@ -32,6 +32,42 @@ def _format_timestamp(value: Optional[str]) -> str:
     return parsed.astimezone().strftime("%d.%m.%Y %H:%M")
 
 
+def _row_value(row, key: str):
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _format_salary_amount(value: Optional[float]) -> Optional[str]:
+    if value in (None, ""):
+        return None
+    numeric = float(value)
+    if numeric.is_integer():
+        return f"{int(numeric):,}"
+    return f"{numeric:,.2f}".rstrip("0").rstrip(".")
+
+
+def _format_salary_line(row) -> str:
+    salary_min = _row_value(row, "salary_min")
+    salary_max = _row_value(row, "salary_max")
+    salary_currency = _row_value(row, "salary_currency") or ""
+    salary_period = _row_value(row, "salary_period") or ""
+
+    formatted_min = _format_salary_amount(salary_min)
+    formatted_max = _format_salary_amount(salary_max)
+    if not formatted_min and not formatted_max:
+        return ""
+
+    suffix = f" / {salary_period}" if salary_period else ""
+    prefix = f"{salary_currency} " if salary_currency else ""
+    if formatted_min and formatted_max:
+        return f"Salary: {prefix}{formatted_min}-{formatted_max}{suffix}".strip()
+    if formatted_min:
+        return f"Salary: from {prefix}{formatted_min}{suffix}".strip()
+    return f"Salary: up to {prefix}{formatted_max}{suffix}".strip()
+
+
 def _chunks_blocks(blocks: Sequence[str]) -> List[str]:
     messages: List[str] = []
     current = ""
@@ -69,12 +105,20 @@ def format_job_line(row) -> str:
     title = html.escape(row["title"])
     company = html.escape(row["company"])
     apply_url = html.escape(row["canonical_url"], quote=True)
-    return (
-        f"<b>{title}</b>\n"
-        f"<i>{company}</i>\n"
-        f"Posted: {posted}\n"
-        f"Apply: {apply_url}"
+    salary_line = _format_salary_line(row)
+    parts = [
+        f"<b>{title}</b>",
+        f"<i>{company}</i>",
+    ]
+    if salary_line:
+        parts.append(html.escape(salary_line))
+    parts.extend(
+        [
+            f"Posted: {posted}",
+            f"Apply: {apply_url}",
+        ]
     )
+    return "\n".join(parts)
 
 
 def build_digest_messages(

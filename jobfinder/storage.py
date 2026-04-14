@@ -41,6 +41,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     date_created TEXT,
     date_active TEXT,
     date_expired TEXT,
+    salary_min REAL,
+    salary_max REAL,
+    salary_currency TEXT,
+    salary_period TEXT,
     canonical_url TEXT NOT NULL,
     description TEXT NOT NULL,
     duplicate_fingerprint TEXT NOT NULL,
@@ -78,9 +82,9 @@ INSERT INTO jobs (
     external_id, collector, query_text, portal, source, title, company, country_code, state, city,
     timezone, timezone_offset, work_place_json, work_type_json, contract_type_json,
     career_level_json, occupation, industry, language, is_direct, is_recruiter,
-    date_created, date_active, date_expired, canonical_url, description,
-    duplicate_fingerprint, is_canonical, sent_at, fetched_at, raw_json
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    date_created, date_active, date_expired, salary_min, salary_max, salary_currency, salary_period,
+    canonical_url, description, duplicate_fingerprint, is_canonical, sent_at, fetched_at, raw_json
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(portal, source, external_id) DO UPDATE SET
     collector = excluded.collector,
     query_text = excluded.query_text,
@@ -103,6 +107,10 @@ ON CONFLICT(portal, source, external_id) DO UPDATE SET
     date_created = excluded.date_created,
     date_active = excluded.date_active,
     date_expired = excluded.date_expired,
+    salary_min = excluded.salary_min,
+    salary_max = excluded.salary_max,
+    salary_currency = excluded.salary_currency,
+    salary_period = excluded.salary_period,
     canonical_url = excluded.canonical_url,
     description = excluded.description,
     duplicate_fingerprint = excluded.duplicate_fingerprint,
@@ -128,6 +136,14 @@ class Storage:
                 conn.execute("UPDATE jobs SET collector = 'jobdatafeeds' WHERE collector = '' OR collector IS NULL")
             if "query_text" not in job_columns:
                 conn.execute("ALTER TABLE jobs ADD COLUMN query_text TEXT NOT NULL DEFAULT ''")
+            if "salary_min" not in job_columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN salary_min REAL")
+            if "salary_max" not in job_columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN salary_max REAL")
+            if "salary_currency" not in job_columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN salary_currency TEXT")
+            if "salary_period" not in job_columns:
+                conn.execute("ALTER TABLE jobs ADD COLUMN salary_period TEXT")
             if "incomplete_titles_json" not in run_columns:
                 conn.execute(
                     "ALTER TABLE runs ADD COLUMN incomplete_titles_json TEXT NOT NULL DEFAULT '[]'"
@@ -309,6 +325,10 @@ class Storage:
             job.date_created,
             job.date_active,
             job.date_expired,
+            job.salary_min,
+            job.salary_max,
+            job.salary_currency,
+            job.salary_period,
             job.canonical_url,
             job.description,
             job.duplicate_fingerprint,
@@ -345,6 +365,10 @@ class Storage:
             date_created=row["date_created"],
             date_active=row["date_active"],
             date_expired=row["date_expired"],
+            salary_min=row["salary_min"],
+            salary_max=row["salary_max"],
+            salary_currency=row["salary_currency"],
+            salary_period=row["salary_period"],
             canonical_url=row["canonical_url"],
             description=row["description"],
             duplicate_fingerprint=row["duplicate_fingerprint"],
