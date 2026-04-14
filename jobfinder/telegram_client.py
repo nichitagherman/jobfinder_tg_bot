@@ -129,7 +129,6 @@ def _build_truncated_warning(incomplete_titles: Sequence[str] | None) -> str:
 
 
 def format_job_line(row) -> str:
-    posted = _format_timestamp(row["date_created"] or row["fetched_at"])
     title = html.escape(row["title"])
     company = html.escape(row["company"])
     apply_url = html.escape(row["canonical_url"], quote=True)
@@ -143,7 +142,6 @@ def format_job_line(row) -> str:
         parts.append(html.escape(salary_line))
     parts.extend(
         [
-            f"Posted: {posted}",
             f'Apply: <a href="{apply_url}">{apply_label}</a>',
         ]
     )

@@ -1383,12 +1383,10 @@ class TelegramTests(unittest.TestCase):
             f"{datetime(2025, 1, 1, 17, 0, tzinfo=timezone.utc).astimezone().strftime('%d.%m.%Y %H:%M')}-"
             f"{datetime(2025, 1, 1, 18, 0, tzinfo=timezone.utc).astimezone().strftime('%d.%m.%Y %H:%M')}"
         )
-        expected_posted = datetime(2025, 1, 1, 18, 0, tzinfo=timezone.utc).astimezone().strftime("%d.%m.%Y %H:%M")
         self.assertIn(expected_header, messages[0])
         self.assertIn("Incomplete titles: strategy, business analyst", messages[0])
         self.assertIn("<b>Role</b>", messages[0])
         self.assertIn("<i>Comp</i>", messages[0])
-        self.assertIn(f"Posted: {expected_posted}", messages[0])
         self.assertIn(f"{expected_header}\n\n<b>Role</b>", messages[0])
         self.assertTrue(messages[0].endswith("Incomplete titles: strategy, business analyst"))
 
