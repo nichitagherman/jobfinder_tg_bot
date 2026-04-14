@@ -22,6 +22,7 @@ import jobfinder.runner as runner_module
 from jobfinder.runner import _sort_jobs_for_output, previous_scheduled_runtime
 from jobfinder.storage import Storage
 from jobfinder.telegram_client import build_digest_messages
+from jobfinder.title_filters import detect_title_language, excluded_by_german_title
 
 
 SAMPLE_JOB = {
@@ -153,6 +154,9 @@ excluded_job_title_markers = [
   "Principal",
   "Chief",
 ]
+
+exclude_german_job_titles = true
+german_job_title_confidence_threshold = 0.85
 """
 
 
@@ -228,6 +232,8 @@ class ConfigTests(unittest.TestCase):
                 settings.notification_times,
                 [time(11, 0), time(14, 0), time(18, 0)],
             )
+            self.assertTrue(settings.exclude_german_job_titles)
+            self.assertEqual(settings.german_job_title_confidence_threshold, 0.85)
             self.assertIn("Delivery Hero", settings.priority_companies)
 
     def test_build_presets_can_exclude_remote(self):
@@ -250,6 +256,8 @@ class ConfigTests(unittest.TestCase):
                         'jobdatafeeds_job_titles = ["strategy"]',
                         'jsearch_job_titles = ["strategy analyst"]',
                         'excluded_job_title_markers = ["Senior", "Engineer"]',
+                        "exclude_german_job_titles = false",
+                        "german_job_title_confidence_threshold = 0.9",
                         '',
                     ]
                 ),
@@ -259,6 +267,8 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.jobdatafeeds_search_titles, ["strategy"])
             self.assertEqual(settings.jsearch_search_titles, ["strategy analyst"])
             self.assertEqual(settings.excluded_job_title_markers, ["Senior", "Engineer"])
+            self.assertFalse(settings.exclude_german_job_titles)
+            self.assertEqual(settings.german_job_title_confidence_threshold, 0.9)
             self.assertEqual(settings.notification_times, [time(9, 0), time(17, 0)])
             self.assertEqual(settings.filters_path, custom_filters)
 
@@ -628,6 +638,44 @@ class JSearchTests(unittest.TestCase):
         self.assertTrue(job.is_direct)
 
 
+class TitleLanguageTests(unittest.TestCase):
+    def _job(self, title: str):
+        raw = dict(SAMPLE_JOB)
+        raw["title"] = title
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["title"] = title
+        return normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+
+    def test_detect_title_language_marks_clearly_german_titles(self):
+        detection = detect_title_language("Projektmanager Digitalisierung")
+        self.assertEqual(detection.detected_language, "german")
+        self.assertGreaterEqual(detection.confidence, 0.85)
+
+        detection = detect_title_language("Assistenz der Geschäftsführung - Finance & Operations")
+        self.assertEqual(detection.detected_language, "german")
+        self.assertGreaterEqual(detection.confidence, 0.85)
+
+    def test_detect_title_language_keeps_english_titles(self):
+        self.assertEqual(detect_title_language("Strategy Analyst").detected_language, "english")
+        self.assertEqual(detect_title_language("Operations Manager").detected_language, "english")
+
+    def test_excluded_by_german_title_keeps_mixed_titles_below_threshold(self):
+        job = self._job("PMO-Manager:in - Turnaround Programm – Berlin")
+        self.assertIsNone(excluded_by_german_title(job, enabled=True, threshold=0.85))
+
+        job = self._job("Technical Consultant DCS Retire - Schwerpunkt SQL & SAP; m/w/d")
+        self.assertIsNone(excluded_by_german_title(job, enabled=True, threshold=0.85))
+
+    def test_excluded_by_german_title_respects_enablement_and_threshold(self):
+        job = self._job("Projektmanager Digitalisierung")
+        self.assertIsNone(excluded_by_german_title(job, enabled=False, threshold=0.85))
+        detection = excluded_by_german_title(job, enabled=True, threshold=0.85)
+        self.assertIsNotNone(detection)
+        assert detection is not None
+        self.assertEqual(detection.detected_language, "german")
+        self.assertGreaterEqual(detection.confidence, 0.85)
+
+
 class DedupeTests(unittest.TestCase):
     def _job(self, portal, source, url, title="Project Management Lead", company="Microsoft"):
         base = normalize_job(SAMPLE_JOB, datetime(2025, 1, 23, tzinfo=timezone.utc))
@@ -728,6 +776,8 @@ class FetchSchedulingTests(unittest.TestCase):
                     'jobdatafeeds_job_titles = ["alpha", "beta", "gamma"]',
                     'jsearch_job_titles = ["alpha analyst", "beta analyst", "gamma analyst"]',
                     'excluded_job_title_markers = ["Senior", "Engineer"]',
+                    "exclude_german_job_titles = true",
+                    "german_job_title_confidence_threshold = 0.85",
                     "",
                 ]
             ),
@@ -809,6 +859,8 @@ class JSearchFetchTests(unittest.TestCase):
                     'jobdatafeeds_job_titles = ["alpha", "beta", "gamma"]',
                     'jsearch_job_titles = ["alpha analyst", "beta analyst", "gamma analyst"]',
                     'excluded_job_title_markers = ["Senior", "Engineer"]',
+                    "exclude_german_job_titles = true",
+                    "german_job_title_confidence_threshold = 0.85",
                     "",
                 ]
             ),
@@ -1059,6 +1111,121 @@ class RunnerAggregationTests(unittest.TestCase):
             self.assertEqual(len(FakeStorage.last_instance.jobs), 1)
             self.assertEqual(FakeStorage.last_instance.jobs[0].collector, "jobdatafeeds")
             self.assertEqual(FakeStorage.last_instance.jobs[0].title, "Operations Manager")
+
+    def test_run_daily_filters_german_titles_and_logs_language_details(self):
+        class FakeStorage:
+            last_instance = None
+
+            def __init__(self, db_path):
+                self.db_path = db_path
+                self.finalized = None
+                self.jobs = []
+                FakeStorage.last_instance = self
+
+            def get_last_checkpoint(self):
+                return datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc)
+
+            def create_run(self, started_at):
+                return 1
+
+            def upsert_jobs(self, jobs):
+                self.jobs = list(jobs)
+                return len(jobs)
+
+            def get_all_jobs(self):
+                return list(self.jobs)
+
+            def update_canonical_flags(self, canonical_urls):
+                self.canonical_urls = list(canonical_urls)
+
+            def get_unsent_canonical_jobs(self):
+                return []
+
+            def mark_jobs_sent(self, canonical_urls, sent_at):
+                self.sent = (list(canonical_urls), sent_at)
+
+            def update_checkpoint(self, upper_bound):
+                self.checkpoint = upper_bound
+
+            def finalize_run(self, run_id, **kwargs):
+                self.finalized = kwargs
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, chat_ids):
+                self.bot_token = bot_token
+                self.chat_ids = chat_ids
+
+            def send_messages(self, messages):
+                return datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+
+        class FakeFilteredOutLogger:
+            def __init__(self):
+                self.messages = []
+
+            def info(self, message):
+                self.messages.append(message)
+
+        class FakeJobDataFeedsClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                raw = dict(SAMPLE_JOB)
+                raw["title"] = "Projektmanager Digitalisierung"
+                raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+                raw["jsonLD"]["title"] = "Projektmanager Digitalisierung"
+                return runner_module.FetchSummary(
+                    jobs=[normalize_job(raw, context.started_at, query_text="project manager")],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=[],
+                )
+
+        class FakeJSearchClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                raw = dict(SAMPLE_JSEARCH_JOB)
+                raw["job_title"] = "Operations Manager"
+                return runner_module.FetchSummary(
+                    jobs=[normalize_jsearch_job(raw, context.started_at, query_text="operations manager in Berlin")],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=[],
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path, filters_path = write_config_files(Path(tmpdir))
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "JOBDATAFEEDS_API_TOKEN=test-token",
+                        "TELEGRAM_BOT_TOKEN=test-bot",
+                        "TELEGRAM_CHAT_ID=12345",
+                        "ENABLE_JSEARCH=true",
+                        "JSEARCH_API_KEY=test-jsearch-token",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            fake_filtered_out_logger = FakeFilteredOutLogger()
+
+            with patch.object(runner_module, "setup_logging"), patch.object(runner_module, "Storage", FakeStorage), patch.object(runner_module, "TelegramClient", FakeTelegramClient), patch.object(runner_module, "JobDataFeedsClient", FakeJobDataFeedsClientForRunner), patch.object(runner_module, "JSearchClient", FakeJSearchClientForRunner), patch.object(runner_module, "FILTERED_OUT_LOGGER", fake_filtered_out_logger):
+                exit_code = runner_module.run_daily(str(env_path), dry_run=True, filters_path=str(filters_path))
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(FakeStorage.last_instance.jobs), 1)
+            self.assertEqual(FakeStorage.last_instance.jobs[0].collector, "jsearch")
+            payload = json.loads(fake_filtered_out_logger.messages[0])
+            self.assertEqual(payload["reason"], "jobdatafeeds_title_language_excluded")
+            self.assertEqual(payload["provider"], "jobdatafeeds")
+            self.assertEqual(payload["query_text"], "project manager")
+            self.assertEqual(payload["details"]["detected_language"], "german")
+            self.assertGreaterEqual(payload["details"]["confidence"], 0.85)
+            self.assertEqual(payload["details"]["threshold"], 0.85)
 
 
 class TelegramTests(unittest.TestCase):

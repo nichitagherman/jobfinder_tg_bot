@@ -39,6 +39,8 @@ cp .env.example .env
    - `jobdatafeeds_job_titles` for JobDataFeeds searches
    - `jsearch_job_titles` for JSearch searches
    - `excluded_job_title_markers` for case-insensitive title exclusions applied across both collectors
+   - `exclude_german_job_titles` to enable conservative German-title exclusion
+   - `german_job_title_confidence_threshold` to control the Lingua confidence cutoff, default `0.85`
    - which notification times are expected, currently `11:00`, `14:00`, and `18:00`
    - logging stays enabled by default; override `LOG_PATH` or `FILTERED_OUT_JOBS_LOG_PATH` in `.env` only if you want the log files elsewhere
 
@@ -98,4 +100,6 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 - The `jobs` table also stores `query_text`, the exact title/query string that produced the row, such as `operations` or `project manager in Berlin`.
 - Filtered-out job log entries also include `query_text` so you can see which search produced a rejected candidate.
 - Titles containing any marker from `excluded_job_title_markers` are filtered out case-insensitively across both collectors.
-- If you ever need to recreate the environment instead of cloning it, use `environment.yml`.
+- German-title exclusion uses `lingua-language-detector` on `title` only, constrained to German vs English, and excludes only confident German detections at or above `german_job_title_confidence_threshold`.
+- Filtered-out German-title entries include `detected_language`, `confidence`, and `threshold` in `runtime/filtered_out_jobs.jsonl`.
+- Install dependencies from [`requirements.txt`](/Users/nikitagerman/Desktop/jobfinder_tg_bot/requirements.txt) or the project metadata in [`pyproject.toml`](/Users/nikitagerman/Desktop/jobfinder_tg_bot/pyproject.toml).

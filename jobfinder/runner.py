@@ -15,7 +15,7 @@ from .logging_utils import FILTERED_OUT_LOGGER_NAME, setup_logging
 from .models import FetchSummary, RunContext
 from .storage import Storage
 from .telegram_client import TelegramClient, build_digest_messages
-from .title_filters import excluded_by_title
+from .title_filters import excluded_by_german_title, excluded_by_title
 
 
 LOGGER = logging.getLogger(__name__)
@@ -120,12 +120,54 @@ def _log_filtered_out_title(job, context: RunContext, matched_markers) -> None:
     FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
 
 
-def _apply_title_exclusions(jobs, context: RunContext, excluded_markers):
+def _log_filtered_out_title_language(job, context: RunContext, *, detected_language: str, confidence: float, threshold: float) -> None:
+    payload = {
+        "reason": f"{job.collector}_title_language_excluded",
+        "provider": job.collector,
+        "title": job.title,
+        "company": job.company,
+        "query_text": job.query_text,
+        "portal": job.portal,
+        "source": job.source,
+        "city": job.city,
+        "state": job.state,
+        "country_code": job.country_code,
+        "date_created": job.date_created,
+        "canonical_url": job.canonical_url,
+        "remote_only": None,
+        "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
+        "upper_bound": context.upper_bound.isoformat(),
+        "details": {
+            "detected_language": detected_language,
+            "confidence": confidence,
+            "threshold": threshold,
+        },
+        "raw_job": job.raw_json,
+    }
+    FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
+
+
+def _apply_title_exclusions(jobs, context: RunContext, settings):
     kept_jobs = []
     for job in jobs:
-        matched_markers = excluded_by_title(job, excluded_markers)
+        matched_markers = excluded_by_title(job, settings.excluded_job_title_markers)
         if matched_markers:
             _log_filtered_out_title(job, context, matched_markers)
+            continue
+
+        language_detection = excluded_by_german_title(
+            job,
+            enabled=settings.exclude_german_job_titles,
+            threshold=settings.german_job_title_confidence_threshold,
+        )
+        if language_detection is not None:
+            _log_filtered_out_title_language(
+                job,
+                context,
+                detected_language=language_detection.detected_language,
+                confidence=language_detection.confidence,
+                threshold=settings.german_job_title_confidence_threshold,
+            )
             continue
         kept_jobs.append(job)
     return kept_jobs
@@ -170,7 +212,7 @@ def run_daily(
             fetch_summary.was_truncated_by_request_cap,
             fetch_summary.incomplete_titles,
         )
-        filtered_jobs = _apply_title_exclusions(fetch_summary.jobs, context, settings.excluded_job_title_markers)
+        filtered_jobs = _apply_title_exclusions(fetch_summary.jobs, context, settings)
         LOGGER.info(
             "Title exclusions applied: fetched_jobs=%s kept_jobs=%s excluded_jobs=%s",
             len(fetch_summary.jobs),

@@ -128,6 +128,8 @@ class Settings:
     jobdatafeeds_search_titles: List[str]
     jsearch_search_titles: List[str]
     excluded_job_title_markers: List[str]
+    exclude_german_job_titles: bool
+    german_job_title_confidence_threshold: float
     priority_companies: List[str]
     search_country_code: str
     allow_all_sources: bool
@@ -199,6 +201,29 @@ def load_excluded_job_title_markers(path: Path) -> List[str]:
     return _load_required_title_list(payload, path, "excluded_job_title_markers")
 
 
+def load_exclude_german_job_titles(path: Path) -> bool:
+    payload = load_filter_payload(path)
+    raw = payload.get("exclude_german_job_titles", True)
+    if not isinstance(raw, bool):
+        raise ValueError(f"Filter config 'exclude_german_job_titles' must be a boolean when present: {path}")
+    return raw
+
+
+def load_german_job_title_confidence_threshold(path: Path) -> float:
+    payload = load_filter_payload(path)
+    raw = payload.get("german_job_title_confidence_threshold", 0.85)
+    if not isinstance(raw, (int, float)):
+        raise ValueError(
+            f"Filter config 'german_job_title_confidence_threshold' must be a number when present: {path}"
+        )
+    threshold = float(raw)
+    if threshold < 0 or threshold > 1:
+        raise ValueError(
+            f"Filter config 'german_job_title_confidence_threshold' must be between 0 and 1: {path}"
+        )
+    return threshold
+
+
 def load_priority_companies(path: Path) -> List[str]:
     payload = load_filter_payload(path)
     priority_companies = payload.get("priority_companies", [])
@@ -262,6 +287,8 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         jobdatafeeds_search_titles=jobdatafeeds_search_titles,
         jsearch_search_titles=jsearch_search_titles,
         excluded_job_title_markers=load_excluded_job_title_markers(resolved_filters_path),
+        exclude_german_job_titles=load_exclude_german_job_titles(resolved_filters_path),
+        german_job_title_confidence_threshold=load_german_job_title_confidence_threshold(resolved_filters_path),
         priority_companies=load_priority_companies(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
         allow_all_sources=_get_bool("ALLOW_ALL_SOURCES", True),

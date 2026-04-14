@@ -49,3 +49,6 @@ excluded_job_title_markers = [
   "Principal",
   "Chief"
 ]
+
+exclude_german_job_titles = true
+german_job_title_confidence_threshold = 0.85
