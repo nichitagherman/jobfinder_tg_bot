@@ -242,20 +242,6 @@ class JobDataFeedsClient:
             "reason": reason,
             "provider": PROVIDER_NAME,
             "title": job.title,
-            "company": job.company,
-            "query_text": job.query_text,
-            "portal": job.portal,
-            "source": job.source,
-            "city": job.city,
-            "state": job.state,
-            "country_code": job.country_code,
-            "date_created": job.date_created,
-            "canonical_url": job.canonical_url,
-            "remote_only": remote_only,
-            "lower_bound": context.lower_bound.isoformat() if context.lower_bound else None,
-            "upper_bound": context.upper_bound.isoformat(),
-            "details": details or {},
-            "raw_job": job.raw_json,
         }
         FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
 

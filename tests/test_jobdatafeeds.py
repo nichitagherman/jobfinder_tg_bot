@@ -1220,12 +1220,14 @@ class RunnerAggregationTests(unittest.TestCase):
             self.assertEqual(len(FakeStorage.last_instance.jobs), 1)
             self.assertEqual(FakeStorage.last_instance.jobs[0].collector, "jsearch")
             payload = json.loads(fake_filtered_out_logger.messages[0])
-            self.assertEqual(payload["reason"], "jobdatafeeds_title_language_excluded")
-            self.assertEqual(payload["provider"], "jobdatafeeds")
-            self.assertEqual(payload["query_text"], "project manager")
-            self.assertEqual(payload["details"]["detected_language"], "german")
-            self.assertGreaterEqual(payload["details"]["confidence"], 0.85)
-            self.assertEqual(payload["details"]["threshold"], 0.85)
+            self.assertEqual(
+                payload,
+                {
+                    "reason": "jobdatafeeds_title_language_excluded",
+                    "provider": "jobdatafeeds",
+                    "title": "Projektmanager Digitalisierung",
+                },
+            )
 
 
 class TelegramTests(unittest.TestCase):
