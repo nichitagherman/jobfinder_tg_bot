@@ -132,6 +132,27 @@ jsearch_job_titles = [
   "business analytics",
   "strategy analyst",
 ]
+
+excluded_job_title_markers = [
+  "HR",
+  "Account",
+  "Senior",
+  "Technical",
+  "Representative",
+  "People",
+  "FinOps",
+  "Engineering",
+  "Techno",
+  "Engineer",
+  "Security",
+  "Vice President",
+  "Head",
+  "Lead",
+  "Director",
+  "VP",
+  "Principal",
+  "Chief",
+]
 """
 
 
@@ -181,6 +202,29 @@ class ConfigTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(
+                settings.excluded_job_title_markers,
+                [
+                    "HR",
+                    "Account",
+                    "Senior",
+                    "Technical",
+                    "Representative",
+                    "People",
+                    "FinOps",
+                    "Engineering",
+                    "Techno",
+                    "Engineer",
+                    "Security",
+                    "Vice President",
+                    "Head",
+                    "Lead",
+                    "Director",
+                    "VP",
+                    "Principal",
+                    "Chief",
+                ],
+            )
+            self.assertEqual(
                 settings.notification_times,
                 [time(11, 0), time(14, 0), time(18, 0)],
             )
@@ -205,6 +249,7 @@ class ConfigTests(unittest.TestCase):
                         'notification_times = ["09:00", "17:00"]',
                         'jobdatafeeds_job_titles = ["strategy"]',
                         'jsearch_job_titles = ["strategy analyst"]',
+                        'excluded_job_title_markers = ["Senior", "Engineer"]',
                         '',
                     ]
                 ),
@@ -213,6 +258,7 @@ class ConfigTests(unittest.TestCase):
             settings = load_settings(str(env_path), filters_path=str(custom_filters))
             self.assertEqual(settings.jobdatafeeds_search_titles, ["strategy"])
             self.assertEqual(settings.jsearch_search_titles, ["strategy analyst"])
+            self.assertEqual(settings.excluded_job_title_markers, ["Senior", "Engineer"])
             self.assertEqual(settings.notification_times, [time(9, 0), time(17, 0)])
             self.assertEqual(settings.filters_path, custom_filters)
 
@@ -471,20 +517,30 @@ class NormalizationTests(unittest.TestCase):
 
     def test_excluded_by_seniority_title_matches_conservative_markers(self):
         senior_job_raw = dict(SAMPLE_JOB)
-        senior_job_raw["title"] = "Head of Strategy"
+        senior_job_raw["title"] = "Senior Strategy Manager"
         senior_job_raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
-        senior_job_raw["jsonLD"]["title"] = "Head of Strategy"
+        senior_job_raw["jsonLD"]["title"] = "Senior Strategy Manager"
         senior_job = normalize_job(senior_job_raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
-        self.assertIn("head", excluded_by_seniority_title(senior_job))
+        self.assertIn("Senior", excluded_by_seniority_title(senior_job, ["Senior", "Lead"]))
 
         team_lead_raw = dict(SAMPLE_JOB)
         team_lead_raw["title"] = "Team Lead - Client Operations Specialist"
         team_lead_raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
         team_lead_raw["jsonLD"]["title"] = "Team Lead - Client Operations Specialist"
         team_lead_job = normalize_job(team_lead_raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
-        markers = excluded_by_seniority_title(team_lead_job)
-        self.assertIn("team lead", markers)
-        self.assertIn("lead", markers)
+        markers = excluded_by_seniority_title(team_lead_job, ["Senior", "Lead"])
+        self.assertIn("Lead", markers)
+
+    def test_excluded_by_seniority_title_matches_requested_case_insensitive_markers(self):
+        raw = dict(SAMPLE_JOB)
+        raw["title"] = "TECHNICAL Account Engineer"
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["title"] = "TECHNICAL Account Engineer"
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+        markers = excluded_by_seniority_title(job, ["Technical", "Account", "Engineer"])
+        self.assertIn("Technical", markers)
+        self.assertIn("Account", markers)
+        self.assertIn("Engineer", markers)
 
     def test_excluded_by_seniority_title_allows_mid_titles(self):
         raw = dict(SAMPLE_JOB)
@@ -492,7 +548,7 @@ class NormalizationTests(unittest.TestCase):
         raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
         raw["jsonLD"]["title"] = "Business Analyst Web and Mobile Banking"
         job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
-        self.assertEqual(excluded_by_seniority_title(job), [])
+        self.assertEqual(excluded_by_seniority_title(job, ["Senior", "Engineer"]), [])
 
 
 class JSearchTests(unittest.TestCase):
@@ -671,6 +727,7 @@ class FetchSchedulingTests(unittest.TestCase):
                     'notification_times = ["11:00", "14:00", "18:00"]',
                     'jobdatafeeds_job_titles = ["alpha", "beta", "gamma"]',
                     'jsearch_job_titles = ["alpha analyst", "beta analyst", "gamma analyst"]',
+                    'excluded_job_title_markers = ["Senior", "Engineer"]',
                     "",
                 ]
             ),
@@ -751,6 +808,7 @@ class JSearchFetchTests(unittest.TestCase):
                     'notification_times = ["11:00", "14:00", "18:00"]',
                     'jobdatafeeds_job_titles = ["alpha", "beta", "gamma"]',
                     'jsearch_job_titles = ["alpha analyst", "beta analyst", "gamma analyst"]',
+                    'excluded_job_title_markers = ["Senior", "Engineer"]',
                     "",
                 ]
             ),
@@ -900,6 +958,107 @@ class RunnerAggregationTests(unittest.TestCase):
                 FakeStorage.last_instance.finalized["incomplete_titles"],
                 ["jobdatafeeds: alpha", "jsearch: beta"],
             )
+
+    def test_run_daily_filters_excluded_titles_from_all_collectors(self):
+        class FakeStorage:
+            last_instance = None
+
+            def __init__(self, db_path):
+                self.db_path = db_path
+                self.finalized = None
+                self.jobs = []
+                FakeStorage.last_instance = self
+
+            def get_last_checkpoint(self):
+                return datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc)
+
+            def create_run(self, started_at):
+                return 1
+
+            def upsert_jobs(self, jobs):
+                self.jobs = list(jobs)
+                return len(jobs)
+
+            def get_all_jobs(self):
+                return list(self.jobs)
+
+            def update_canonical_flags(self, canonical_urls):
+                self.canonical_urls = list(canonical_urls)
+
+            def get_unsent_canonical_jobs(self):
+                return []
+
+            def mark_jobs_sent(self, canonical_urls, sent_at):
+                self.sent = (list(canonical_urls), sent_at)
+
+            def update_checkpoint(self, upper_bound):
+                self.checkpoint = upper_bound
+
+            def finalize_run(self, run_id, **kwargs):
+                self.finalized = kwargs
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, chat_ids):
+                self.bot_token = bot_token
+                self.chat_ids = chat_ids
+
+            def send_messages(self, messages):
+                return datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+
+        class FakeJobDataFeedsClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                raw = dict(SAMPLE_JOB)
+                raw["title"] = "Operations Manager"
+                raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+                raw["jsonLD"]["title"] = "Operations Manager"
+                return runner_module.FetchSummary(
+                    jobs=[normalize_job(raw, context.started_at)],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=[],
+                )
+
+        class FakeJSearchClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                raw = dict(SAMPLE_JSEARCH_JOB)
+                raw["job_title"] = "Operations Engineer"
+                return runner_module.FetchSummary(
+                    jobs=[normalize_jsearch_job(raw, context.started_at)],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=[],
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path, filters_path = write_config_files(Path(tmpdir))
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "JOBDATAFEEDS_API_TOKEN=test-token",
+                        "TELEGRAM_BOT_TOKEN=test-bot",
+                        "TELEGRAM_CHAT_ID=12345",
+                        "ENABLE_JSEARCH=true",
+                        "JSEARCH_API_KEY=test-jsearch-token",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(runner_module, "setup_logging"), patch.object(runner_module, "Storage", FakeStorage), patch.object(runner_module, "TelegramClient", FakeTelegramClient), patch.object(runner_module, "JobDataFeedsClient", FakeJobDataFeedsClientForRunner), patch.object(runner_module, "JSearchClient", FakeJSearchClientForRunner):
+                exit_code = runner_module.run_daily(str(env_path), dry_run=True, filters_path=str(filters_path))
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(FakeStorage.last_instance.jobs), 1)
+            self.assertEqual(FakeStorage.last_instance.jobs[0].collector, "jobdatafeeds")
+            self.assertEqual(FakeStorage.last_instance.jobs[0].title, "Operations Manager")
 
 
 class TelegramTests(unittest.TestCase):

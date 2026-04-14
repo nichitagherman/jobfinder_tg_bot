@@ -28,3 +28,24 @@ jsearch_job_titles = [
   "strategy analyst",
   "project manager"
 ]
+
+excluded_job_title_markers = [
+  "HR",
+  "Account",
+  "Senior",
+  "Technical",
+  "Representative",
+  "People",
+  "FinOps",
+  "Engineering",
+  "Techno",
+  "Engineer",
+  "Security",
+  "Vice President",
+  "Head",
+  "Lead",
+  "Director",
+  "VP",
+  "Principal",
+  "Chief"
+]

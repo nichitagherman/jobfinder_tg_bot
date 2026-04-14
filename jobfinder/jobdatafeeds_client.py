@@ -15,6 +15,7 @@ from .config import SearchPreset, Settings, build_api_title_query
 from .dedupe import build_duplicate_fingerprint, normalize_text
 from .logging_utils import FILTERED_OUT_LOGGER_NAME
 from .models import FetchSummary, NormalizedJob, RunContext
+from .title_filters import excluded_by_title
 
 
 LOGGER = logging.getLogger(__name__)
@@ -23,21 +24,6 @@ PROVIDER_NAME = "jobdatafeeds"
 REQUEST_COOLDOWN_SECONDS = 2.0
 RATE_LIMIT_RETRY_SECONDS = 5.0
 DEFAULT_PAGE_SIZE = 10
-_SENIORITY_EXCLUDED_PHRASES = (
-    "team lead",
-    "vice president",
-)
-_SENIORITY_EXCLUDED_TOKENS = {
-    "head",
-    "lead",
-    "director",
-    "vp",
-    "senior",
-    "principal",
-    "chief",
-}
-
-
 def _parse_iso(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -219,17 +205,8 @@ def title_matches(job: NormalizedJob, search_titles: Iterable[str]) -> bool:
     return any(normalize_text(term) in haystack for term in search_titles)
 
 
-def excluded_by_seniority_title(job: NormalizedJob) -> List[str]:
-    normalized_title = normalize_text(job.title)
-    matched: List[str] = []
-    for phrase in _SENIORITY_EXCLUDED_PHRASES:
-        if phrase in normalized_title:
-            matched.append(phrase)
-    tokens = set(normalized_title.split())
-    for token in sorted(_SENIORITY_EXCLUDED_TOKENS):
-        if token in tokens:
-            matched.append(token)
-    return matched
+def excluded_by_seniority_title(job: NormalizedJob, excluded_markers: Iterable[str]) -> List[str]:
+    return excluded_by_title(job, excluded_markers)
 
 
 class JobDataFeedsClient:
@@ -396,14 +373,14 @@ class JobDataFeedsClient:
             )
             return False
 
-        seniority_markers = excluded_by_seniority_title(job)
-        if seniority_markers:
+        excluded_markers = excluded_by_seniority_title(job, self.settings.excluded_job_title_markers)
+        if excluded_markers:
             self._rejected_job(
-                reason=self._build_filtered_out_reason("seniority_title_excluded"),
+                reason=self._build_filtered_out_reason("title_excluded"),
                 job=job,
                 context=context,
                 remote_only=remote_only,
-                details={"matched_markers": seniority_markers},
+                details={"matched_markers": excluded_markers},
             )
             return False
 

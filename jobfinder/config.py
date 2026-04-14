@@ -127,6 +127,7 @@ class Settings:
     jsearch_max_api_requests_per_run: int
     jobdatafeeds_search_titles: List[str]
     jsearch_search_titles: List[str]
+    excluded_job_title_markers: List[str]
     priority_companies: List[str]
     search_country_code: str
     allow_all_sources: bool
@@ -193,6 +194,11 @@ def load_job_title_lists(path: Path) -> tuple[List[str], List[str]]:
     )
 
 
+def load_excluded_job_title_markers(path: Path) -> List[str]:
+    payload = load_filter_payload(path)
+    return _load_required_title_list(payload, path, "excluded_job_title_markers")
+
+
 def load_priority_companies(path: Path) -> List[str]:
     payload = load_filter_payload(path)
     priority_companies = payload.get("priority_companies", [])
@@ -255,6 +261,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         jsearch_max_api_requests_per_run=_get_int("JSEARCH_MAX_API_REQUESTS_PER_RUN", 2),
         jobdatafeeds_search_titles=jobdatafeeds_search_titles,
         jsearch_search_titles=jsearch_search_titles,
+        excluded_job_title_markers=load_excluded_job_title_markers(resolved_filters_path),
         priority_companies=load_priority_companies(resolved_filters_path),
         search_country_code=os.getenv("SEARCH_COUNTRY_CODE", "de"),
         allow_all_sources=_get_bool("ALLOW_ALL_SOURCES", True),
