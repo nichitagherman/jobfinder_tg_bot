@@ -1430,7 +1430,7 @@ class TelegramTests(unittest.TestCase):
         )
         self.assertIn("<b>Role One</b>\n<i>Comp One</i>", messages[0])
         self.assertIn("<b>Role Two</b>\n<i>Comp Two</i>", messages[0])
-        self.assertIn("Apply: https://example.com/1\n\n<b>Role Two</b>", messages[0])
+        self.assertIn('Apply: <a href="https://example.com/1">example</a>\n\n<b>Role Two</b>', messages[0])
 
     def test_telegram_message_formats_salary_range(self):
         rows = [
@@ -1500,6 +1500,91 @@ class TelegramTests(unittest.TestCase):
         ]
         messages = build_digest_messages(rows, truncated=False, empty_notice=True)
         self.assertNotIn("Salary:", messages[0])
+
+    def test_telegram_message_uses_short_clickable_link_label(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role",
+                "company": "Comp",
+                "portal": "linkedin",
+                "source": "x",
+                "canonical_url": "https://linkedin.com/jobs/view/abc123",
+            }
+        ]
+        messages = build_digest_messages(rows, truncated=False, empty_notice=True)
+        self.assertIn('Apply: <a href="https://linkedin.com/jobs/view/abc123">linkedin</a>', messages[0])
+
+    def test_telegram_message_strips_common_host_prefixes(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role",
+                "company": "Comp",
+                "portal": "x",
+                "source": "x",
+                "canonical_url": "https://www.arbeitsagentur.de/jobsuche/jobdetail/123",
+            },
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T19:00:00+00:00",
+                "fetched_at": "2025-01-01T19:00:00+00:00",
+                "title": "Role Two",
+                "company": "Comp Two",
+                "portal": "x",
+                "source": "x",
+                "canonical_url": "https://job-boards.eu.greenhouse.io/company/jobs/1",
+            },
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T20:00:00+00:00",
+                "fetched_at": "2025-01-01T20:00:00+00:00",
+                "title": "Role Three",
+                "company": "Comp Three",
+                "portal": "x",
+                "source": "x",
+                "canonical_url": "https://de.linkedin.com/jobs/view/abc",
+            },
+        ]
+        messages = build_digest_messages(rows, truncated=False, empty_notice=True)
+        self.assertIn('Apply: <a href="https://www.arbeitsagentur.de/jobsuche/jobdetail/123">arbeitsagentur</a>', messages[0])
+        self.assertIn('Apply: <a href="https://job-boards.eu.greenhouse.io/company/jobs/1">greenhouse</a>', messages[0])
+        self.assertIn('Apply: <a href="https://de.linkedin.com/jobs/view/abc">linkedin</a>', messages[0])
+
+    def test_telegram_message_falls_back_to_link_for_empty_or_malformed_url(self):
+        rows = [
+            {
+                "work_place_json": "[]",
+                "city": "Berlin",
+                "state": "Berlin",
+                "country_code": "de",
+                "date_created": "2025-01-01T18:00:00+00:00",
+                "fetched_at": "2025-01-01T18:00:00+00:00",
+                "title": "Role",
+                "company": "Comp",
+                "portal": "x",
+                "source": "x",
+                "canonical_url": "",
+            }
+        ]
+        messages = build_digest_messages(rows, truncated=False, empty_notice=True)
+        self.assertIn('Apply: <a href="">link</a>', messages[0])
 
     def test_sort_jobs_for_output_orders_by_collector_then_priority_then_recency(self):
         rows = [

@@ -5,6 +5,7 @@ import json
 import logging
 from datetime import datetime
 from typing import Iterable, List, Optional, Sequence
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 
@@ -68,6 +69,33 @@ def _format_salary_line(row) -> str:
     return f"Salary: up to {prefix}{formatted_max}{suffix}".strip()
 
 
+def _apply_link_label(url: str) -> str:
+    try:
+        netloc = urlsplit(url).netloc.lower().strip()
+    except ValueError:
+        return "link"
+    if not netloc:
+        return "link"
+
+    prefixes = ("www.", "job-boards.")
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            if netloc.startswith(prefix):
+                netloc = netloc[len(prefix):]
+                changed = True
+        parts = netloc.split(".")
+        if len(parts) > 2 and len(parts[0]) == 2:
+            netloc = ".".join(parts[1:])
+            changed = True
+
+    host_parts = [part for part in netloc.split(".") if part]
+    if not host_parts:
+        return "link"
+    return host_parts[0]
+
+
 def _chunks_blocks(blocks: Sequence[str]) -> List[str]:
     messages: List[str] = []
     current = ""
@@ -105,6 +133,7 @@ def format_job_line(row) -> str:
     title = html.escape(row["title"])
     company = html.escape(row["company"])
     apply_url = html.escape(row["canonical_url"], quote=True)
+    apply_label = html.escape(_apply_link_label(row["canonical_url"]))
     salary_line = _format_salary_line(row)
     parts = [
         f"<b>{title}</b>",
@@ -115,7 +144,7 @@ def format_job_line(row) -> str:
     parts.extend(
         [
             f"Posted: {posted}",
-            f"Apply: {apply_url}",
+            f'Apply: <a href="{apply_url}">{apply_label}</a>',
         ]
     )
     return "\n".join(parts)
