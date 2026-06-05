@@ -49,7 +49,9 @@ excluded_job_title_markers = [
   "Principal",
   "Chief",
   "Student",
-  "Werkstudent"
+  "Werkstudent",
+  "Business Development Manager",
+  "Sales Manager"
 ]
 
 exclude_german_job_titles = true
