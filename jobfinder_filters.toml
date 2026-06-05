@@ -54,5 +54,9 @@ excluded_job_title_markers = [
   "Sales Manager"
 ]
 
+excluded_source_domains = [
+  "de.trabajo.org"
+]
+
 exclude_german_job_titles = true
 german_job_title_confidence_threshold = 0.85

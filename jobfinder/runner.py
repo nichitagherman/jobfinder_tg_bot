@@ -13,6 +13,7 @@ from .jobdatafeeds_client import JobDataFeedsClient
 from .jsearch_client import JSearchClient
 from .logging_utils import FILTERED_OUT_LOGGER_NAME, setup_logging
 from .models import FetchSummary, RunContext
+from .source_filters import excluded_by_source_domain
 from .storage import Storage
 from .telegram_client import TelegramClient, build_digest_messages
 from .title_filters import excluded_by_german_title, excluded_by_title
@@ -115,9 +116,25 @@ def _log_filtered_out_title_language(job, context: RunContext, *, detected_langu
     FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
 
 
-def _apply_title_exclusions(jobs, context: RunContext, settings):
+def _log_filtered_out_source_domain(job, context: RunContext, matched_domains) -> None:
+    payload = {
+        "reason": f"{job.collector}_source_domain_excluded",
+        "provider": job.collector,
+        "title": job.title,
+        "canonical_url": job.canonical_url,
+        "matched_domains": list(matched_domains),
+    }
+    FILTERED_OUT_LOGGER.info(json.dumps(payload, ensure_ascii=True))
+
+
+def _apply_job_exclusions(jobs, context: RunContext, settings):
     kept_jobs = []
     for job in jobs:
+        matched_domains = excluded_by_source_domain(job, settings.excluded_source_domains)
+        if matched_domains:
+            _log_filtered_out_source_domain(job, context, matched_domains)
+            continue
+
         matched_markers = excluded_by_title(job, settings.excluded_job_title_markers)
         if matched_markers:
             _log_filtered_out_title(job, context, matched_markers)
@@ -180,9 +197,9 @@ def run_daily(
             fetch_summary.was_truncated_by_request_cap,
             fetch_summary.incomplete_titles,
         )
-        filtered_jobs = _apply_title_exclusions(fetch_summary.jobs, context, settings)
+        filtered_jobs = _apply_job_exclusions(fetch_summary.jobs, context, settings)
         LOGGER.info(
-            "Title exclusions applied: fetched_jobs=%s kept_jobs=%s excluded_jobs=%s",
+            "Job exclusions applied: fetched_jobs=%s kept_jobs=%s excluded_jobs=%s",
             len(fetch_summary.jobs),
             len(filtered_jobs),
             len(fetch_summary.jobs) - len(filtered_jobs),

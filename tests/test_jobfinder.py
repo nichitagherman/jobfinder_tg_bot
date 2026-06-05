@@ -20,6 +20,7 @@ from jobfinder.jobdatafeeds_client import (
 from jobfinder.jsearch_client import JSearchClient, normalize_job as normalize_jsearch_job, select_date_posted
 import jobfinder.runner as runner_module
 from jobfinder.runner import _sort_jobs_for_output, previous_scheduled_runtime
+from jobfinder.source_filters import excluded_by_source_domain, normalize_domain
 from jobfinder.storage import Storage
 from jobfinder.telegram_client import build_digest_messages
 from jobfinder.title_filters import detect_title_language, excluded_by_german_title
@@ -155,6 +156,8 @@ excluded_job_title_markers = [
   "Chief",
 ]
 
+excluded_source_domains = []
+
 exclude_german_job_titles = true
 german_job_title_confidence_threshold = 0.85
 """
@@ -256,6 +259,7 @@ class ConfigTests(unittest.TestCase):
                         'jobdatafeeds_job_titles = ["strategy"]',
                         'jsearch_job_titles = ["strategy analyst"]',
                         'excluded_job_title_markers = ["Senior", "Engineer"]',
+                        'excluded_source_domains = ["de.trabajo.org"]',
                         "exclude_german_job_titles = false",
                         "german_job_title_confidence_threshold = 0.9",
                         '',
@@ -267,6 +271,7 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(settings.jobdatafeeds_search_titles, ["strategy"])
             self.assertEqual(settings.jsearch_search_titles, ["strategy analyst"])
             self.assertEqual(settings.excluded_job_title_markers, ["Senior", "Engineer"])
+            self.assertEqual(settings.excluded_source_domains, ["de.trabajo.org"])
             self.assertFalse(settings.exclude_german_job_titles)
             self.assertEqual(settings.german_job_title_confidence_threshold, 0.9)
             self.assertEqual(settings.notification_times, [time(9, 0), time(17, 0)])
@@ -559,6 +564,17 @@ class NormalizationTests(unittest.TestCase):
         raw["jsonLD"]["title"] = "Business Analyst Web and Mobile Banking"
         job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
         self.assertEqual(excluded_by_seniority_title(job, ["Senior", "Engineer"]), [])
+
+    def test_excluded_by_source_domain_matches_exact_and_subdomains(self):
+        raw = dict(SAMPLE_JOB)
+        raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+        raw["jsonLD"]["url"] = "https://jobs.de.trabajo.org/view/123?utm=abc"
+        job = normalize_job(raw, datetime(2025, 1, 23, tzinfo=timezone.utc))
+
+        self.assertEqual(normalize_domain("https://www.de.trabajo.org/path"), "de.trabajo.org")
+        self.assertEqual(excluded_by_source_domain(job, ["de.trabajo.org"]), ["de.trabajo.org"])
+        self.assertEqual(excluded_by_source_domain(job, ["trabajo.org"]), ["trabajo.org"])
+        self.assertEqual(excluded_by_source_domain(job, ["example.com"]), [])
 
     def test_normalize_job_extracts_salary_from_base_salary(self):
         raw = dict(SAMPLE_JOB)
@@ -1245,6 +1261,117 @@ class RunnerAggregationTests(unittest.TestCase):
             self.assertEqual(len(FakeStorage.last_instance.jobs), 1)
             self.assertEqual(FakeStorage.last_instance.jobs[0].collector, "jobdatafeeds")
             self.assertEqual(FakeStorage.last_instance.jobs[0].title, "Operations Manager")
+
+    def test_run_daily_filters_excluded_source_domains_from_all_collectors(self):
+        class FakeStorage:
+            last_instance = None
+
+            def __init__(self, db_path):
+                self.db_path = db_path
+                self.finalized = None
+                self.jobs = []
+                FakeStorage.last_instance = self
+
+            def get_last_checkpoint(self):
+                return datetime(2026, 3, 26, 9, 0, tzinfo=timezone.utc)
+
+            def create_run(self, started_at):
+                return 1
+
+            def upsert_jobs(self, jobs):
+                self.jobs = list(jobs)
+                return len(jobs)
+
+            def get_all_jobs(self):
+                return list(self.jobs)
+
+            def update_canonical_flags(self, canonical_urls):
+                self.canonical_urls = list(canonical_urls)
+
+            def get_unsent_canonical_jobs(self):
+                return []
+
+            def mark_jobs_sent(self, canonical_urls, sent_at):
+                self.sent = (list(canonical_urls), sent_at)
+
+            def update_checkpoint(self, upper_bound):
+                self.checkpoint = upper_bound
+
+            def finalize_run(self, run_id, **kwargs):
+                self.finalized = kwargs
+
+        class FakeTelegramClient:
+            def __init__(self, bot_token, chat_ids):
+                self.bot_token = bot_token
+                self.chat_ids = chat_ids
+
+            def send_messages(self, messages):
+                return datetime(2026, 3, 26, 12, 0, tzinfo=timezone.utc)
+
+        class FakeJobDataFeedsClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                raw = dict(SAMPLE_JOB)
+                raw["title"] = "Operations Manager"
+                raw["jsonLD"] = dict(SAMPLE_JOB["jsonLD"])
+                raw["jsonLD"]["title"] = "Operations Manager"
+                raw["jsonLD"]["url"] = "https://de.trabajo.org/job/123"
+                return runner_module.FetchSummary(
+                    jobs=[normalize_job(raw, context.started_at)],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=[],
+                )
+
+        class FakeJSearchClientForRunner:
+            def __init__(self, settings):
+                self.settings = settings
+
+            def fetch_jobs(self, context, *, include_remote=True):
+                raw = dict(SAMPLE_JSEARCH_JOB)
+                raw["job_title"] = "Operations Manager"
+                raw["job_apply_link"] = "https://example.com/jobs/456"
+                raw["apply_options"] = []
+                return runner_module.FetchSummary(
+                    jobs=[normalize_jsearch_job(raw, context.started_at)],
+                    api_requests_made=1,
+                    jobs_fetched=1,
+                    was_truncated_by_request_cap=False,
+                    incomplete_titles=[],
+                )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            env_path, filters_path = write_config_files(Path(tmpdir))
+            filters_path.write_text(
+                filters_path.read_text(encoding="utf-8").replace(
+                    "excluded_source_domains = []",
+                    'excluded_source_domains = ["de.trabajo.org"]',
+                ),
+                encoding="utf-8",
+            )
+            env_path.write_text(
+                "\n".join(
+                    [
+                        "JOBDATAFEEDS_API_TOKEN=test-token",
+                        "TELEGRAM_BOT_TOKEN=test-bot",
+                        "TELEGRAM_CHAT_ID=12345",
+                        "ENABLE_JSEARCH=true",
+                        "JSEARCH_API_KEY=test-jsearch-token",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            with patch.object(runner_module, "setup_logging"), patch.object(runner_module, "Storage", FakeStorage), patch.object(runner_module, "TelegramClient", FakeTelegramClient), patch.object(runner_module, "JobDataFeedsClient", FakeJobDataFeedsClientForRunner), patch.object(runner_module, "JSearchClient", FakeJSearchClientForRunner):
+                exit_code = runner_module.run_daily(str(env_path), dry_run=True, filters_path=str(filters_path))
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(len(FakeStorage.last_instance.jobs), 1)
+            self.assertEqual(FakeStorage.last_instance.jobs[0].collector, "jsearch")
+            self.assertEqual(FakeStorage.last_instance.jobs[0].canonical_url, "https://example.com/jobs/456")
 
     def test_run_daily_filters_german_titles_and_logs_language_details(self):
         class FakeStorage:

@@ -128,6 +128,7 @@ class Settings:
     jobdatafeeds_search_titles: List[str]
     jsearch_search_titles: List[str]
     excluded_job_title_markers: List[str]
+    excluded_source_domains: List[str]
     exclude_german_job_titles: bool
     german_job_title_confidence_threshold: float
     priority_companies: List[str]
@@ -199,6 +200,14 @@ def load_job_title_lists(path: Path) -> tuple[List[str], List[str]]:
 def load_excluded_job_title_markers(path: Path) -> List[str]:
     payload = load_filter_payload(path)
     return _load_required_title_list(payload, path, "excluded_job_title_markers")
+
+
+def load_excluded_source_domains(path: Path) -> List[str]:
+    payload = load_filter_payload(path)
+    excluded_domains = payload.get("excluded_source_domains", [])
+    if not isinstance(excluded_domains, list):
+        raise ValueError(f"Filter config 'excluded_source_domains' must be a list when present: {path}")
+    return [str(item).strip() for item in excluded_domains if str(item).strip()]
 
 
 def load_exclude_german_job_titles(path: Path) -> bool:
@@ -287,6 +296,7 @@ def load_settings(env_path: str = ".env", filters_path: Optional[str] = None) ->
         jobdatafeeds_search_titles=jobdatafeeds_search_titles,
         jsearch_search_titles=jsearch_search_titles,
         excluded_job_title_markers=load_excluded_job_title_markers(resolved_filters_path),
+        excluded_source_domains=load_excluded_source_domains(resolved_filters_path),
         exclude_german_job_titles=load_exclude_german_job_titles(resolved_filters_path),
         german_job_title_confidence_threshold=load_german_job_title_confidence_threshold(resolved_filters_path),
         priority_companies=load_priority_companies(resolved_filters_path),
