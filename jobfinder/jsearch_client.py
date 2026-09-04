@@ -192,7 +192,7 @@ class JSearchClient:
             headers=self._request_headers(),
             method="GET",
         )
-        with urlopen(request, timeout=30) as response:
+        with urlopen(request, timeout=120) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _execute_request_with_retry(self, params: Dict[str, str]) -> Dict[str, object]:
