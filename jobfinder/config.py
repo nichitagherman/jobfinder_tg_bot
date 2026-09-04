@@ -147,7 +147,7 @@ class Settings:
 
     @property
     def jsearch_base_url(self) -> str:
-        return f"https://{self.jsearch_api_host}/search"
+        return f"https://{self.jsearch_api_host}/search-v2"
 
     def build_presets(self, *, include_remote: bool = True) -> List[SearchPreset]:
         title_query = " OR ".join(build_api_title_query(title) for title in self.jobdatafeeds_search_titles)
