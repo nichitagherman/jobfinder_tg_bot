@@ -51,7 +51,10 @@ excluded_job_title_markers = [
   "Student",
   "Werkstudent",
   "Business Development Manager",
-  "Sales Manager"
+  "Sales Manager",
+  "Intern",
+  "Legal",
+  "Praktikum",
 ]
 
 excluded_source_domains = [
