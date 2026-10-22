@@ -93,7 +93,8 @@ The runner still uses the last successful checkpoint when one exists. If no chec
 - Filtered-out jobs are logged separately as JSON Lines in `runtime/filtered_out_jobs.jsonl`.
 - Each outbound JobDataFeeds and JSearch call is logged in `runtime/jobfinder.log` as a provider-specific cURL-like command with the RapidAPI key redacted.
 - The implementation assumes the JobDataFeeds API can be queried with page-based pagination and JSON output.
-- JSearch uses RapidAPI host `jsearch.p.rapidapi.com` and maps the fetch window to the closest supported `date_posted` bucket: `today`, `3days`, `week`, `month`, or `anytime`.
+- JSearch uses `/search-v2` on RapidAPI host `jsearch.p.rapidapi.com`, reads listings from `data.jobs`, and follows `data.cursor` for subsequent pages within the request cap. Legacy responses with a `data` list are also supported. Unexpected response shapes fail the run instead of silently reporting zero jobs.
+- JSearch maps the fetch window to the closest supported `date_posted` bucket: `today`, `3days`, `week`, `month`, or `anytime`.
 - Date filtering is sent with `dateCreatedMin` / `dateCreatedMax`
 - Local Berlin targeting now uses `geoPointLat`, `geoPointLng`, and `geoDistance` rather than `city=Berlin`.
 - If a run stops before all likely pages are fetched, the DB stores the incomplete titles for that run and the Telegram digest warns about them.

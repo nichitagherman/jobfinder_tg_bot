@@ -1018,6 +1018,73 @@ class JSearchFetchTests(unittest.TestCase):
         )
         return load_settings(str(env_path), filters_path=str(filters))
 
+    def test_fetch_jobs_reads_v2_jobs_and_follows_each_titles_cursor(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = self._settings(Path(tmpdir), max_requests=5)
+            payloads = {
+                ("alpha analyst in Berlin", 1, "false"): {"status": "OK", "data": {
+                    "jobs": [dict(SAMPLE_JSEARCH_JOB, job_id="alpha-first")], "cursor": "alpha-next",
+                }},
+                ("beta analyst in Berlin", 1, "false"): {"status": "OK", "data": {
+                    "jobs": [dict(SAMPLE_JSEARCH_JOB, job_id=f"beta-{i}") for i in range(10)], "cursor": None,
+                }},
+                ("gamma analyst in Berlin", 1, "false"): {"status": "OK", "data": {
+                    "jobs": [], "cursor": None,
+                }},
+                ("alpha analyst in Berlin", 2, "false"): {"status": "OK", "data": {
+                    "jobs": [dict(SAMPLE_JSEARCH_JOB, job_id="alpha-second")], "cursor": None,
+                }},
+            }
+            client = FakeJSearchClient(settings, payloads)
+            now = datetime(2026, 10, 22, 10, 0, tzinfo=timezone.utc)
+            context = type("Ctx", (), {
+                "started_at": now, "upper_bound": now,
+                "lower_bound": datetime(2026, 10, 21, 10, 0, tzinfo=timezone.utc),
+            })()
+
+            summary = client.fetch_jobs(context, include_remote=False)
+
+            self.assertEqual(summary.jobs_fetched, 12)
+            self.assertEqual(summary.api_requests_made, 4)
+            self.assertFalse(summary.was_truncated_by_request_cap)
+            self.assertEqual([req["query"] for req in client.requests], [
+                "alpha analyst in Berlin", "beta analyst in Berlin", "gamma analyst in Berlin", "alpha analyst in Berlin",
+            ])
+            self.assertTrue(all("cursor" not in req for req in client.requests[:3]))
+            self.assertEqual(client.requests[3]["cursor"], "alpha-next")
+            self.assertEqual(summary.jobs[-1].external_id, "alpha-second")
+            self.assertEqual(summary.jobs[-1].query_text, "alpha analyst in Berlin")
+
+    def test_fetch_jobs_marks_v2_cursor_unfinished_at_request_cap(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = self._settings(Path(tmpdir), max_requests=3)
+            client = FakeJSearchClient(settings, {
+                ("alpha analyst in Berlin", 1, "false"): {"status": "OK", "data": {
+                    "jobs": [SAMPLE_JSEARCH_JOB], "cursor": "alpha-next",
+                }},
+            })
+            now = datetime(2026, 10, 22, 10, 0, tzinfo=timezone.utc)
+            context = type("Ctx", (), {"started_at": now, "upper_bound": now, "lower_bound": None})()
+
+            summary = client.fetch_jobs(context, include_remote=False)
+
+            self.assertEqual(summary.jobs_fetched, 1)
+            self.assertTrue(summary.was_truncated_by_request_cap)
+            self.assertEqual(summary.incomplete_titles, ["alpha analyst"])
+
+    def test_unexpected_response_shape_raises_instead_of_reporting_zero_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            client = FakeJSearchClient(self._settings(Path(tmpdir)), {})
+            for payload in ({"status": "OK", "data": {}}, {"status": "OK", "data": None}, {"status": "OK"}):
+                with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, "JSearch.*response"):
+                    client._raw_results(payload)
+
+    def test_error_response_raises_instead_of_reporting_zero_jobs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            client = FakeJSearchClient(self._settings(Path(tmpdir)), {})
+            with self.assertRaisesRegex(ValueError, "JSearch.*ERROR"):
+                client._raw_results({"status": "ERROR", "data": []})
+
     def test_fetch_jobs_gives_every_title_page_one_before_page_two(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             settings = self._settings(Path(tmpdir), max_requests=5)

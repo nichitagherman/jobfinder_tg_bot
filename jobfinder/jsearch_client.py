@@ -217,8 +217,15 @@ class JSearchClient:
                 raise
 
     def _raw_results(self, payload: Dict[str, object]) -> List[object]:
-        result = payload.get("data", [])
-        return result if isinstance(result, list) else []
+        status = payload.get("status")
+        if status not in (None, "OK"):
+            raise ValueError(f"JSearch returned an unsuccessful response: status={status}")
+        result = payload.get("data")
+        if isinstance(result, dict):
+            result = result.get("jobs")
+        if not isinstance(result, list):
+            raise ValueError("Unexpected JSearch response: expected a data list or data.jobs list")
+        return result
 
     def _query_modes(self, include_remote: bool) -> List[bool]:
         return [False, True] if include_remote else [False]
@@ -318,6 +325,7 @@ class JSearchClient:
         truncated_by_request_cap = False
         incomplete_titles: set[str] = set()
         queue = self._query_queue()
+        cursors: Dict[str, str] = {}
 
         while queue:
             if api_requests_made >= self.settings.jsearch_max_api_requests_per_run:
@@ -334,6 +342,8 @@ class JSearchClient:
 
             title, page = queue.popleft()
             params = self._build_query_params(title=title, page=page, context=context, remote_query=remote_query)
+            if title in cursors:
+                params["cursor"] = cursors[title]
             payload = self._perform_request(params)
             api_requests_made += 1
             result = self._raw_results(payload)
@@ -345,7 +355,17 @@ class JSearchClient:
                 query_text=str(params.get("query") or title),
             )
             jobs.extend(normalized_page)
-            has_more_pages = len(result) >= PAGE_SIZE
+            data = payload.get("data")
+            if isinstance(data, dict):
+                # V2 pagination is driven by the cursor, even for short pages.
+                cursor = data.get("cursor")
+                if cursor is not None and not isinstance(cursor, str):
+                    raise ValueError("Unexpected JSearch response: expected a string or null data.cursor")
+                has_more_pages = bool(cursor)
+                if cursor:
+                    cursors[title] = cursor
+            else:
+                has_more_pages = len(result) >= PAGE_SIZE
             LOGGER.info(
                 "JSearch title page processed: provider=%s title=%s page=%s kept=%s raw=%s has_more_pages=%s queue_remaining=%s remote_query=%s",
                 PROVIDER_NAME,

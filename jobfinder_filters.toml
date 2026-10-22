@@ -55,6 +55,7 @@ excluded_job_title_markers = [
   "Intern",
   "Legal",
   "Praktikum",
+  "Trainee"
 ]
 
 excluded_source_domains = [
